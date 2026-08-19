@@ -198,6 +198,39 @@ export class CoreArc {
       this.group.add(ring);
     }
 
+    /* ---------- Orion interlock: counter-tilted gold ring ---------- */
+    this.interlock = new THREE.Mesh(
+      new THREE.TorusGeometry(1.2, 0.014, 8, 110),
+      new THREE.MeshBasicMaterial({ color: 0xd4af37, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })
+    );
+    this.interlock.position.copy(this.orbCenter);
+    this.interlock.rotation.x = Math.PI / 2.6;
+    this.group.add(this.interlock);
+
+    /* ---------- 3D targeting tick ring — 128 radial razor ticks ---------- */
+    const TICKS = 128;
+    this.tickMat = new THREE.MeshBasicMaterial({
+      color: 0x00f0ff,
+      transparent: true,
+      opacity: 0.8,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this.tickRing = new THREE.InstancedMesh(new THREE.BoxGeometry(0.013, 0.11, 0.013), this.tickMat, TICKS);
+    const tm = new THREE.Matrix4();
+    const qZ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+    for (let i = 0; i < TICKS; i++) {
+      const a = (i / TICKS) * TAU;
+      const major = i % 8 === 0;
+      const pos = new THREE.Vector3(Math.cos(a) * 1.56, this.orbCenter.y, Math.sin(a) * 1.56);
+      const rot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -a).multiply(qZ.clone());
+      tm.compose(pos, rot, new THREE.Vector3(1, major ? 2.2 : 1, 1));
+      this.tickRing.setMatrixAt(i, tm);
+    }
+    this.tickRing.instanceMatrix.needsUpdate = true;
+    this.group.add(this.tickRing);
+
     /* ---------- iris shutter blades around the orb ---------- */
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * TAU;
