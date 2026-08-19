@@ -59,6 +59,11 @@ export class CoreArc {
   private conduitPulses: Array<{ mesh: THREE.Mesh; curve: THREE.QuadraticBezierCurve3; offset: number }> = [];
   private movingPanels: Array<{ mesh: THREE.Mesh; base: THREE.Vector3; radial: THREE.Vector3; phase: number }> = [];
 
+  /* Orion Mark V interlock construct */
+  private interlock!: THREE.Mesh;
+  private tickRing!: THREE.InstancedMesh;
+  private tickMat!: THREE.MeshBasicMaterial;
+
   private spinVel = 0;
   private plasmaCur = 1;
   private beamCur = 0.2;
@@ -530,6 +535,18 @@ export class CoreArc {
     this.rings[2].rotation.z += dt * spin * 1.1;
     this.rings[2].rotation.x -= dt * spin * 0.4;
     this.rings[1].scale.setScalar(1 + levels.bass * 0.08);
+
+    /* Orion interlock — counter-rotating gold construct, breathes with the core */
+    this.interlock.rotation.y -= dt * spin * 2.3;
+    this.interlock.rotation.z = Math.sin(time * 0.9) * 0.16 * (0.3 + this.irisCur);
+    const interlockMat = this.interlock.material as THREE.MeshBasicMaterial;
+    interlockMat.opacity = 0.45 + this.plasmaCur * 0.14 + levels.mid * 0.3;
+    this.interlock.scale.setScalar(1 + levels.bass * 0.05 + this.successGlow * 0.12);
+
+    /* targeting tick ring — razor ticks orbit + shimmer on the high band */
+    this.tickRing.rotation.y += dt * (0.25 + spin * 1.1);
+    this.tickMat.opacity = 0.5 + levels.high * 0.45 + this.irisCur * 0.2 + this.successGlow * 0.3;
+    this.tickMat.color.copy(this.tint).lerp(GOLD, this.successGlow * 0.8);
 
     /* iris shutters */
     for (const blade of this.irisBlades) {
