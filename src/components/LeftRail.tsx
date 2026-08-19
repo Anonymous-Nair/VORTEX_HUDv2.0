@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { TabId } from "../types";
 import { useVortex } from "../store/vortex-store";
+import { useCoreSettings } from "../store/settings";
 import { simulator } from "../state/simulator";
 import { synth } from "../audio/synth";
 
@@ -88,6 +89,16 @@ const TABS: TabDef[] = [
   },
 ];
 
+function CoreLabButton(): JSX.Element {
+  const labOpen = useCoreSettings((s) => s.labOpen);
+  const toggleLab = useCoreSettings((s) => s.toggleLab);
+  return (
+    <button className={`btn sm wide ${labOpen ? "active" : ""}`} onClick={() => toggleLab()}>
+      CORE LAB
+    </button>
+  );
+}
+
 export function LeftRail(): JSX.Element {
   const tab = useVortex((s) => s.tab);
   const setTab = useVortex((s) => s.setTab);
@@ -151,6 +162,7 @@ export function LeftRail(): JSX.Element {
       <button className="btn sm wide gold" onClick={() => setLabOpen(true)}>
         AGENT LAB
       </button>
+      <CoreLabButton />
 
       <div className="row-spacer" />
       <div style={{ textAlign: "center", fontSize: 7.5, letterSpacing: "0.2em", color: "var(--faint)" }}>

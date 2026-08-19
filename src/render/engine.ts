@@ -2,10 +2,12 @@ import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { BokehPass } from "three/examples/jsm/postprocessing/BokehPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import type { CameraMode, DirectorShot, TabId } from "../types";
 import { useVortex } from "../store/vortex-store";
+import { useCoreSettings } from "../store/settings";
 import { bus } from "../store/event-bus";
 import { synth } from "../audio/synth";
 import { CoreArc } from "./core-arc";
@@ -14,14 +16,15 @@ import { OfficeScene } from "./office";
 import { NetworkViz } from "./network";
 import { CAMERA_KEYS } from "../data/defaults";
 import { FpsMeter } from "../utils/perf";
-import { TAU, clamp, damp, lerp, smoothstep } from "../utils/math";
+import { clamp, damp, lerp, smoothstep } from "../utils/math";
 
 /* ============================================================
    VORTEX RENDER ENGINE
    Single WebGL2 pipeline · filmic tonemapping · UnrealBloom ·
-   adaptive resolution scaling · Cinematic Director Camera AI
-   (FREE / ORBIT / TACTICAL / AGENT_FOLLOW / WORKSTATION_FOCUS /
-    TASK_TRACK / DIRECTOR / CINEMATIC).
+   Bokeh depth-of-field · adaptive resolution scaling ·
+   live Core Control Lab parameter feed · Cinematic Director
+   Camera AI (FREE / ORBIT / TACTICAL / AGENT_FOLLOW /
+   WORKSTATION_FOCUS / TASK_TRACK / DIRECTOR / CINEMATIC).
    ============================================================ */
 
 interface TabFrame {
@@ -48,10 +51,13 @@ export class VortexEngine {
 
   private renderer: THREE.WebGLRenderer;
   private composer: EffectComposer;
+  private bloom: UnrealBloomPass;
+  private bokeh: BokehPass | null = null;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private clock = new THREE.Clock();
   private time = 0;
+  private simTime = 0;
   private raf = 0;
   private fps = new FpsMeter();
   private statsAcc = 0;
@@ -69,10 +75,15 @@ export class VortexEngine {
   private shake = 0;
   private shotOverride: { mode: CameraMode; until: number } | null = null;
   private lastCoreState = "";
+  private lastTab: TabId = "core";
   private dragging = false;
   private lastPointer = { x: 0, y: 0 };
   private canvas: HTMLCanvasElement;
   private unsubscribers: Array<() => void> = [];
+
+  /* control-lab caches */
+  private lastTint = "";
+  private lastEmissive = -1;
 
   onFrame: ((dt: number) => void) | null = null;
 
@@ -118,14 +129,27 @@ export class VortexEngine {
     this.office.group.visible = false;
     this.net.group.visible = false;
 
-    /* post */
+    /* post — bloom matrix + depth-of-field */
     const rt = new THREE.WebGLRenderTarget(2, 2, { samples: 4, type: THREE.HalfFloatType });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    const bloom = new UnrealBloomPass(new THREE.Vector2(1024, 1024), 0.85, 0.55, 0.3);
-    this.composer.addPass(bloom);
+    try {
+      this.bokeh = new BokehPass(this.scene, this.camera, {
+        focus: 10,
+        aperture: 0.00016,
+        maxblur: 0.0045,
+      });
+      this.bokeh.enabled = false;
+      this.composer.addPass(this.bokeh);
+    } catch (err) {
+      console.warn("[vortex] BokehPass unavailable — DoF disabled.", err);
+      this.bokeh = null;
+    }
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1024, 1024), 0.85, 0.55, 0.3);
+    this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
 
+    this.applySettings(true);
     this.applyTab(useVortex.getState().tab, true);
     this.resize();
     this.bindPointer();
@@ -196,6 +220,25 @@ export class VortexEngine {
     }
   }
 
+  /** pushes Core Control Lab parameters into the live pipeline */
+  private applySettings(force = false): void {
+    const s = useCoreSettings.getState();
+    this.bloom.strength = s.bloomStrength;
+    this.bloom.threshold = s.bloomThreshold;
+    this.bloom.radius = s.bloomRadius;
+    this.renderer.toneMappingExposure = s.exposure;
+    this.ambient.setDensity(s.dustDensity, s.streamDensity);
+    this.ambient.setScale(s.dustScale, s.streamScale);
+    if (force || s.tint !== this.lastTint) {
+      this.lastTint = s.tint;
+      this.arc.setTint(s.tint);
+    }
+    if (force || s.emissive !== this.lastEmissive) {
+      this.lastEmissive = s.emissive;
+      this.arc.setEmissive(s.emissive);
+    }
+  }
+
   private bindPointer(): void {
     const c = this.canvas;
     c.addEventListener("pointerdown", (e) => {
@@ -250,6 +293,7 @@ export class VortexEngine {
 
   private updateCamera(dt: number): void {
     const st = useVortex.getState();
+    const s = useCoreSettings.getState();
     let mode: CameraMode = st.cameraMode;
     if (st.tlPlaying) mode = "DIRECTOR";
     else if (this.shotOverride) {
@@ -345,6 +389,17 @@ export class VortexEngine {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
+
+    /* depth-of-field — dolly focus onto workstation shots */
+    if (this.bokeh) {
+      const wantDof = mode === "WORKSTATION_FOCUS" && s.dof;
+      this.bokeh.enabled = wantDof;
+      if (wantDof) {
+        const u = this.bokeh.uniforms as Record<string, { value: number }>;
+        const focusDist = this.camera.position.distanceTo(this.look);
+        if (u["focus"]) u["focus"].value = damp(u["focus"].value, focusDist, 6, dt);
+      }
+    }
   }
 
   /* ---------------- main loop ---------------- */
@@ -355,6 +410,11 @@ export class VortexEngine {
     this.fps.tick();
 
     const st = useVortex.getState();
+    const settings = useCoreSettings.getState();
+    const sdt = dt * clamp(settings.speed, 0.1, 5);
+    this.simTime += sdt;
+    this.applySettings();
+
     const levels = synth.getLevels();
 
     if (st.tab !== this.lastTab) {
@@ -366,10 +426,10 @@ export class VortexEngine {
       this.arc.setState(st.coreState);
     }
 
-    this.arc.update(dt, this.time, levels, st.coreState);
-    this.ambient.update(dt, this.time, levels);
+    this.arc.update(sdt, this.simTime, levels, st.coreState);
+    this.ambient.update(sdt, this.simTime, levels);
     if (this.humanoid.group.visible || this.humanoid.morphValue() > 0.01) {
-      this.humanoid.update(dt, this.time, levels);
+      this.humanoid.update(sdt, this.simTime, levels);
     }
     if (this.office.group.visible) {
       this.office.update(dt, this.time);
@@ -415,8 +475,6 @@ export class VortexEngine {
       }
     }
   }
-
-  private lastTab: TabId = "core";
 
   private applyPixelRatio(): void {
     const base = Math.min(window.devicePixelRatio || 1, 1.75);
@@ -468,5 +526,3 @@ export function destroyEngine(): void {
     instance = null;
   }
 }
-
-export const ENGINE_TAU = TAU;

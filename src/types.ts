@@ -136,6 +136,8 @@ export interface HoloWindow {
   h: number;
   z: number;
   minimized: boolean;
+  /** degrees — driven by ROTATE gestures / alt-drag */
+  rot: number;
 }
 
 export type GestureKind = "PINCH" | "GRAB" | "ZOOM" | "ROTATE" | "SWIPE";

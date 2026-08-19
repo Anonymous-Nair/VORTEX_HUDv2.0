@@ -66,7 +66,20 @@ export class CoreArc {
   private flickerCur = 0.1;
   private tint = new THREE.Color("#00f0ff");
   private tintTarget = new THREE.Color("#00f0ff");
+  private userTint = new THREE.Color("#00f0ff");
+  private emissiveScale = 1;
   private successGlow = 0;
+
+  /** Core Control Lab — live plasma tint (conduits, orb, beams, rings) */
+  setTint(hex: string): void {
+    this.userTint.set(hex);
+    this.tintTarget.copy(this.userTint);
+  }
+
+  /** Core Control Lab — emissive multiplier (glare-safe tuning) */
+  setEmissive(v: number): void {
+    this.emissiveScale = v;
+  }
 
   constructor() {
     const metal = new THREE.MeshStandardMaterial({ color: 0x131318, metalness: 0.94, roughness: 0.3 });
@@ -432,7 +445,7 @@ export class CoreArc {
       this.tintTarget.copy(RED);
       this.flash("#ff3333");
     } else {
-      this.tintTarget.copy(CYAN);
+      this.tintTarget.copy(this.userTint);
     }
   }
 
@@ -463,7 +476,7 @@ export class CoreArc {
     const flick = 1 + this.flickerCur * 0.45 * Math.sin(time * 31 + Math.sin(time * 7.3) * 4);
 
     /* plasma conduits */
-    this.plasmaMat.emissiveIntensity = this.plasmaCur * flick;
+    this.plasmaMat.emissiveIntensity = this.plasmaCur * flick * this.emissiveScale;
     this.plasmaMat.emissive.copy(this.tint);
     this.plasmaGlowMat.opacity = 0.05 + 0.06 * this.plasmaCur * 0.4 * flick;
     this.plasmaGlowMat.color.copy(this.tint);

@@ -93,6 +93,7 @@ interface VortexState {
   focusHolo: (id: string) => void;
   moveHolo: (id: string, x: number, y: number) => void;
   resizeHolo: (id: string, w: number, h: number) => void;
+  rotateHolo: (id: string, rot: number) => void;
   setLabOpen: (v: boolean) => void;
   setDebugOpen: (v: boolean) => void;
   setStats: (s: EngineStats) => void;
@@ -201,7 +202,7 @@ export const useVortex = create<VortexState>()((set, get) => ({
     };
     const [x, y] = offsets[kind];
     const [w, h] = sizes[kind];
-    const win: HoloWindow = { id: `holo-${kind}`, kind, x, y, w, h, z, minimized: false };
+    const win: HoloWindow = { id: `holo-${kind}`, kind, x, y, w, h, z, minimized: false, rot: 0 };
     set({ holoOpen: true, holoZ: z, holoWindows: [...st.holoWindows, win] });
   },
 
@@ -232,6 +233,11 @@ export const useVortex = create<VortexState>()((set, get) => ({
   resizeHolo: (id, w, h) =>
     set((st) => ({
       holoWindows: st.holoWindows.map((win) => (win.id === id ? { ...win, w, h } : win)),
+    })),
+
+  rotateHolo: (id, rot) =>
+    set((st) => ({
+      holoWindows: st.holoWindows.map((win) => (win.id === id ? { ...win, rot } : win)),
     })),
 
   setLabOpen: (v) => set({ labOpen: v }),
