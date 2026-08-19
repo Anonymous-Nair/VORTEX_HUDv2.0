@@ -6,6 +6,7 @@ import { synth } from "../audio/synth";
 import { MissionMap } from "./MissionMap";
 import { MemoryGraph } from "./MemoryGraph";
 import { HolographicLayer } from "./HolographicLayer";
+import { CoreControlLab } from "./CoreControlLab";
 
 const TAB_TITLES: Record<string, { title: string; sub: string }> = {
   core: { title: "CENTRAL CORE", sub: "monumental energy arc · plasma conduit array" },
@@ -89,7 +90,6 @@ export function Viewport(): JSX.Element {
       {tab === "memory" && <MemoryGraph />}
       {holoOpen && tab === "core" && <HolographicLayer />}
       <CoreControlLab />
-      <GestureChip />
 
       {engineFailed && (
         <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", zIndex: 30 }}>

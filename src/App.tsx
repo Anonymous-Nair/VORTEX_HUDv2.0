@@ -13,7 +13,6 @@ import { LowerStream } from "./components/LowerStream";
 import { DebugConsole } from "./components/DebugConsole";
 import { AgentLab } from "./components/AgentLab";
 import { BootOverlay } from "./components/BootOverlay";
-import { CoreControlLab } from "./components/CoreControlLab";
 
 const TAB_ORDER: TabId[] = ["core", "agents", "intel", "missions", "network", "memory"];
 
@@ -100,8 +99,9 @@ export default function App(): JSX.Element {
       <TimelineScrubber />
       <LowerStream />
 
-      {/* HUD overlays — explicitly mounted at app level */}
-      <CoreControlLab />
+      {/* HUD overlays — explicitly mounted at app level.
+          CoreControlLab is mounted inside the Viewport frame (fixed dock);
+          GestureChip + the vision/gesture pipeline live here. */}
       <GestureChip />
       <DebugConsole />
       <AgentLab />
