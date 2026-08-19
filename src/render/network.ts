@@ -192,6 +192,13 @@ export class NetworkViz {
     this.packets.push({ edge: edgeIdx, t: 0, speed: 0.55 + Math.random() * 0.7 });
   }
 
+  private density = 1;
+
+  /** Visual Control Lab — network traffic density & behavior */
+  setDensity(d: number): void {
+    this.density = Math.max(0.1, Math.min(3, d));
+  }
+
   /** inject tokens at the INPUT layer */
   burst(n: number): void {
     const layer0Edges = this.edges.map((e, i) => ({ e, i })).filter(({ e }) => this.nodeLayer[e[0]] === 0);
@@ -224,7 +231,7 @@ export class NetworkViz {
         this.arrivalWindow.push(performance.now());
         const out = this.outEdges.get(b);
         if (out && this.nodeLayer[b] < 9) {
-          const spawns = Math.random() < 0.85 ? 1 + (Math.random() < 0.3 ? 1 : 0) : 0;
+          const spawns = Math.random() < Math.min(0.97, 0.85 * this.density) ? 1 + (Math.random() < 0.3 * this.density ? 1 : 0) : 0;
           for (let s = 0; s < spawns; s++) {
             const ne = out[Math.floor(Math.random() * out.length)];
             if (this.packets.length + next.length < PACKET_CAP) {

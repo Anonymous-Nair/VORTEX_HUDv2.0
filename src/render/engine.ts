@@ -5,12 +5,13 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { BokehPass } from "three/examples/jsm/postprocessing/BokehPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
-import type { CameraMode, DirectorShot, TabId } from "../types";
+import type { AudioLevels, CameraMode, DirectorShot, TabId } from "../types";
 import { useVortex } from "../store/vortex-store";
 import { useCoreSettings } from "../store/settings";
 import { bus } from "../store/event-bus";
 import { synth } from "../audio/synth";
 import { CoreArc } from "./core-arc";
+import { EnergyBeam } from "./beam-column";
 import { AmbientParticles, AMBIENT_TOTAL, HUMANOID_COUNT, HumanoidParticles } from "./particles";
 import { OfficeScene } from "./office";
 import { NetworkViz } from "./network";
@@ -19,12 +20,12 @@ import { FpsMeter } from "../utils/perf";
 import { clamp, damp, lerp, smoothstep } from "../utils/math";
 
 /* ============================================================
-   VORTEX RENDER ENGINE
-   Single WebGL2 pipeline · filmic tonemapping · UnrealBloom ·
-   Bokeh depth-of-field · adaptive resolution scaling ·
-   live Core Control Lab parameter feed · Cinematic Director
-   Camera AI (FREE / ORBIT / TACTICAL / AGENT_FOLLOW /
-   WORKSTATION_FOCUS / TASK_TRACK / DIRECTOR / CINEMATIC).
+   VORTEX RENDER ENGINE — STAGE 8
+   WebGL2 pipeline · filmic tonemapping · UnrealBloom (safe-knee) ·
+   Bokeh DoF · adaptive resolution · Energy Beam mode · camera
+   lock · atmosphere · full Visual Control Lab feed.
+   The central construct is rigidly pinned to the dead center of
+   the viewport — panels never translate it.
    ============================================================ */
 
 interface TabFrame {
@@ -44,6 +45,7 @@ const TAB_FRAMES: Record<TabId, TabFrame> = {
 
 export class VortexEngine {
   readonly arc: CoreArc;
+  readonly beam: EnergyBeam;
   readonly ambient: AmbientParticles;
   readonly humanoid: HumanoidParticles;
   readonly office: OfficeScene;
@@ -84,6 +86,8 @@ export class VortexEngine {
   /* control-lab caches */
   private lastTint = "";
   private lastEmissive = -1;
+  private lastGeometry = "";
+  private lastChrome = "";
 
   onFrame: ((dt: number) => void) | null = null;
 
@@ -96,7 +100,7 @@ export class VortexEngine {
       stencil: false,
     });
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.toneMappingExposure = 1.0;
 
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 220);
     this.camera.position.copy(this.pos);
@@ -120,16 +124,18 @@ export class VortexEngine {
 
     /* subsystems */
     this.arc = new CoreArc();
+    this.beam = new EnergyBeam();
     this.ambient = new AmbientParticles();
     this.humanoid = new HumanoidParticles();
     this.office = new OfficeScene();
     this.net = new NetworkViz();
-    this.scene.add(this.arc.group, this.ambient.group, this.humanoid.group, this.office.group, this.net.group);
+    this.scene.add(this.arc.group, this.beam.group, this.ambient.group, this.humanoid.group, this.office.group, this.net.group);
+    this.beam.group.visible = false;
     this.humanoid.group.visible = false;
     this.office.group.visible = false;
     this.net.group.visible = false;
 
-    /* post — bloom matrix + depth-of-field */
+    /* post — DoF + bloom matrix + output */
     const rt = new THREE.WebGLRenderTarget(2, 2, { samples: 4, type: THREE.HalfFloatType });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
@@ -145,7 +151,7 @@ export class VortexEngine {
       console.warn("[vortex] BokehPass unavailable — DoF disabled.", err);
       this.bokeh = null;
     }
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(1024, 1024), 0.85, 0.55, 0.3);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1024, 1024), 0.62, 0.42, 0.55);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
 
@@ -163,6 +169,7 @@ export class VortexEngine {
       }),
       bus.on("CORE_STATE_CHANGED", ({ next }) => {
         this.arc.setState(next);
+        this.beam.setState(next);
       })
     );
 
@@ -182,8 +189,10 @@ export class VortexEngine {
   }
 
   private applyTab(tab: TabId, instant: boolean): void {
-    this.arc.group.visible = tab === "core" || tab === "intel";
-    this.arc.setArcVisible(tab === "core");
+    const geometry = useCoreSettings.getState().coreGeometry;
+    this.arc.group.visible = (tab === "core" && geometry === "ARC") || tab === "intel";
+    this.arc.setArcVisible(tab === "core" && geometry === "ARC");
+    this.beam.group.visible = tab === "core" && geometry === "BEAM";
     this.office.group.visible = tab === "agents";
     this.net.group.visible = tab === "network";
     this.humanoid.group.visible = tab === "intel";
@@ -191,7 +200,7 @@ export class VortexEngine {
 
     const frame = TAB_FRAMES[tab];
     this.center.copy(frame.center);
-    this.dist = frame.dist;
+    this.dist = Math.min(frame.dist, useCoreSettings.getState().cameraLimit);
     this.pitch = frame.pitch;
     if (tab === "network") this.yaw = -0.55;
     if (instant) {
@@ -220,7 +229,7 @@ export class VortexEngine {
     }
   }
 
-  /** pushes Core Control Lab parameters into the live pipeline */
+  /** pushes Visual Control Lab parameters into the live pipeline */
   private applySettings(force = false): void {
     const s = useCoreSettings.getState();
     this.bloom.strength = s.bloomStrength;
@@ -229,24 +238,52 @@ export class VortexEngine {
     this.renderer.toneMappingExposure = s.exposure;
     this.ambient.setDensity(s.dustDensity, s.streamDensity);
     this.ambient.setScale(s.dustScale, s.streamScale);
+    this.net.setDensity(s.networkDensity);
+    this.office.setLighting(s.hqLighting);
+
+    const fog = this.scene.fog as THREE.FogExp2;
+    fog.density = 0.008 + s.atmosphere * 0.034;
+
     if (force || s.tint !== this.lastTint) {
       this.lastTint = s.tint;
       this.arc.setTint(s.tint);
+      this.beam.setTint(s.tint);
     }
     if (force || s.emissive !== this.lastEmissive) {
       this.lastEmissive = s.emissive;
       this.arc.setEmissive(s.emissive);
+    }
+    this.beam.setDensity(s.streamDensity);
+    this.beam.setScale(s.streamScale);
+    this.beam.setIntensityScale(s.coreIntensity);
+
+    if (force || s.coreGeometry !== this.lastGeometry) {
+      this.lastGeometry = s.coreGeometry;
+      this.applyTab(useVortex.getState().tab, false);
+      const st = useVortex.getState();
+      st.pushLog("sys", "CORE", `geometry matrix → ${s.coreGeometry === "ARC" ? "MONUMENT ARC" : "INTELLIGENCE COLUMN"}`);
+    }
+
+    /* UI chrome vars (throttled by value comparison) */
+    const chrome = `${s.uiScale}|${s.holoOpacity}|${s.scanlines ? 1 : 0}`;
+    if (force || chrome !== this.lastChrome) {
+      this.lastChrome = chrome;
+      const root = document.documentElement.style;
+      root.setProperty("--ui-scale", String(s.uiScale));
+      root.setProperty("--holo-alpha", String(s.holoOpacity));
+      root.setProperty("--scan-alpha", s.scanlines ? "1" : "0");
     }
   }
 
   private bindPointer(): void {
     const c = this.canvas;
     c.addEventListener("pointerdown", (e) => {
+      if (useVortex.getState().cameraLocked) return;
       this.dragging = true;
       this.lastPointer = { x: e.clientX, y: e.clientY };
     });
     window.addEventListener("pointermove", (e) => {
-      if (!this.dragging) return;
+      if (!this.dragging || useVortex.getState().cameraLocked) return;
       const dx = e.clientX - this.lastPointer.x;
       const dy = e.clientY - this.lastPointer.y;
       this.lastPointer = { x: e.clientX, y: e.clientY };
@@ -263,7 +300,9 @@ export class VortexEngine {
     });
     c.addEventListener("wheel", (e) => {
       e.preventDefault();
-      this.dist = clamp(this.dist * (1 + e.deltaY * 0.0011), 3.2, 34);
+      if (useVortex.getState().cameraLocked) return;
+      const limit = useCoreSettings.getState().cameraLimit;
+      this.dist = clamp(this.dist * (1 + e.deltaY * 0.0011), 3.2, limit);
     }, { passive: false });
   }
 
@@ -294,6 +333,10 @@ export class VortexEngine {
   private updateCamera(dt: number): void {
     const st = useVortex.getState();
     const s = useCoreSettings.getState();
+
+    /* camera lock — freeze all motion */
+    if (st.cameraLocked && !st.tlPlaying) return;
+
     let mode: CameraMode = st.cameraMode;
     if (st.tlPlaying) mode = "DIRECTOR";
     else if (this.shotOverride) {
@@ -404,6 +447,17 @@ export class VortexEngine {
 
   /* ---------------- main loop ---------------- */
 
+  private scaleLevels(l: AudioLevels, sens: number): AudioLevels {
+    const k = clamp(sens, 0.2, 3);
+    return {
+      level: clamp(l.level * k, 0, 1.4),
+      bass: clamp(l.bass * k, 0, 1.4),
+      mid: clamp(l.mid * k, 0, 1.4),
+      high: clamp(l.high * k, 0, 1.4),
+      talk: l.talk,
+    };
+  }
+
   private update(): void {
     const dt = clamp(this.clock.getDelta(), 0, 0.05);
     this.time += dt;
@@ -415,7 +469,7 @@ export class VortexEngine {
     this.simTime += sdt;
     this.applySettings();
 
-    const levels = synth.getLevels();
+    const levels = this.scaleLevels(synth.getLevels(), settings.audioSensitivity);
 
     if (st.tab !== this.lastTab) {
       this.lastTab = st.tab;
@@ -424,9 +478,13 @@ export class VortexEngine {
     if (st.coreState !== this.lastCoreState) {
       this.lastCoreState = st.coreState;
       this.arc.setState(st.coreState);
+      this.beam.setState(st.coreState);
     }
 
     this.arc.update(sdt, this.simTime, levels, st.coreState);
+    if (this.beam.group.visible) {
+      this.beam.update(sdt, this.simTime, levels);
+    }
     this.ambient.update(sdt, this.simTime, levels);
     if (this.humanoid.group.visible || this.humanoid.morphValue() > 0.01) {
       this.humanoid.update(sdt, this.simTime, levels);
@@ -459,6 +517,7 @@ export class VortexEngine {
           AMBIENT_TOTAL +
           this.ambient.activeSparks() +
           (this.humanoid.group.visible ? HUMANOID_COUNT : 0) +
+          (this.beam.group.visible ? 48000 : 0) +
           this.net.getStats().active,
         resScale: this.resScale,
       });

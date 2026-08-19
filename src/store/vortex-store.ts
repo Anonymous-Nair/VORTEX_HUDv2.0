@@ -76,8 +76,10 @@ interface VortexState {
   tlSpeed: number;
   tlLoop: boolean;
   engineFailed: boolean;
+  cameraLocked: boolean;
 
   setBooted: (v: boolean) => void;
+  toggleCameraLock: () => void;
   setTab: (t: TabId) => void;
   setCoreState: (s: CoreState) => void;
   setCameraMode: (m: CameraMode) => void;
@@ -126,8 +128,11 @@ export const useVortex = create<VortexState>()((set, get) => ({
   tlSpeed: 1,
   tlLoop: true,
   engineFailed: false,
+  cameraLocked: false,
 
   setBooted: (v) => set({ booted: v }),
+
+  toggleCameraLock: () => set((st) => ({ cameraLocked: !st.cameraLocked })),
 
   setTab: (t) => {
     if (get().tab !== t) set({ tab: t });
