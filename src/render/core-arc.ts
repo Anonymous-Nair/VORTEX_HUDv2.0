@@ -190,6 +190,22 @@ export class CoreArc {
 
     this.group.add(this.arc);
 
+    /* [FORENSIC DEBUG — temporary] undeniable render proof at the core root */
+    console.log("[DEBUG CORE] CoreArc instantiated and added to scene at", performance.now());
+    const debugMat = new THREE.MeshBasicMaterial({
+      color: 0xff00ff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.9,
+      toneMapped: false,
+      depthTest: false,
+    });
+    const debugCube = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.4, 2.4), debugMat);
+    debugCube.position.copy(this.orbCenter);
+    debugCube.renderOrder = 999;
+    debugCube.name = "FORENSIC_DEBUG_CUBE";
+    this.group.add(debugCube);
+
     /* ---------- gyro rings around the orb ---------- */
     const ringDefs: Array<[number, number, THREE.Material]> = [
       [1.02, 0.035, new THREE.MeshStandardMaterial({ color: 0x241d08, emissive: 0xd4af37, emissiveIntensity: 1.1, metalness: 0.9, roughness: 0.3 })],
