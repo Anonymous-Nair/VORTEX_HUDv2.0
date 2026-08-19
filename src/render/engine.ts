@@ -57,7 +57,8 @@ export class VortexEngine {
   private bokeh: BokehPass | null = null;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
-  private clock = new THREE.Clock();
+  /** manual delta-time (replaces THREE.Clock to avoid deprecation spam) */
+  private lastFrameMs = 0;
   private time = 0;
   private simTime = 0;
   private raf = 0;
@@ -86,6 +87,11 @@ export class VortexEngine {
   /* control-lab caches */
   private lastTint = "";
   private lastEmissive = -1;
+  private warnedOnce = new Set<string>();
+
+  private hemiLight!: THREE.HemisphereLight;
+  private keyLight!: THREE.DirectionalLight;
+  private rimLight!: THREE.DirectionalLight;
   private lastGeometry = "";
   private lastChrome = "";
 
@@ -114,13 +120,13 @@ export class VortexEngine {
     pmrem.dispose();
     this.scene.environmentIntensity = 0.42;
 
-    /* lights */
-    const hemi = new THREE.HemisphereLight(0x25324a, 0x050507, 0.75);
-    const key = new THREE.DirectionalLight(0xffe3b0, 1.5);
-    key.position.set(7, 11, 5);
-    const rim = new THREE.DirectionalLight(0x00f0ff, 0.8);
-    rim.position.set(-8, 4, -7);
-    this.scene.add(hemi, key, rim);
+    /* lights — refs held for the Visual Control Lab HQ-lighting proxy */
+    this.hemiLight = new THREE.HemisphereLight(0x25324a, 0x050507, 0.75);
+    this.keyLight = new THREE.DirectionalLight(0xffe3b0, 1.5);
+    this.keyLight.position.set(7, 11, 5);
+    this.rimLight = new THREE.DirectionalLight(0x00f0ff, 0.8);
+    this.rimLight.position.set(-8, 4, -7);
+    this.scene.add(this.hemiLight, this.keyLight, this.rimLight);
 
     /* subsystems */
     this.arc = new CoreArc();
@@ -134,6 +140,9 @@ export class VortexEngine {
     this.humanoid.group.visible = false;
     this.office.group.visible = false;
     this.net.group.visible = false;
+
+    /* hand scene lights to the HQ so its setLighting proxy owns them */
+    this.safeCall(this.office, "bindLights", this.hemiLight, this.keyLight, this.rimLight);
 
     /* post — DoF + bloom matrix + output */
     const rt = new THREE.WebGLRenderTarget(2, 2, { samples: 4, type: THREE.HalfFloatType });
@@ -173,7 +182,7 @@ export class VortexEngine {
       })
     );
 
-    this.clock.start();
+    this.lastFrameMs = performance.now();
     const loop = () => {
       if (this.disposed) return;
       this.raf = requestAnimationFrame(loop);
@@ -229,6 +238,22 @@ export class VortexEngine {
     }
   }
 
+  /**
+   * Defensive subsystem dispatcher — if any subsystem is temporarily
+   * unmounted or lacks the proxy method, a single controlled warning is
+   * logged instead of throwing an unhandled exception that would abort
+   * the WebGL2 viewport.
+   */
+  private safeCall(target: object, method: string, ...args: unknown[]): void {
+    const fn = (target as Record<string, unknown>)[method];
+    if (typeof fn === "function") {
+      (fn as (...a: unknown[]) => void).apply(target, args);
+    } else if (!this.warnedOnce.has(method)) {
+      this.warnedOnce.add(method);
+      console.warn(`[vortex] subsystem guard: "${method}" unavailable — graceful fallback engaged`);
+    }
+  }
+
   /** pushes Visual Control Lab parameters into the live pipeline */
   private applySettings(force = false): void {
     const s = useCoreSettings.getState();
@@ -236,25 +261,27 @@ export class VortexEngine {
     this.bloom.threshold = s.bloomThreshold;
     this.bloom.radius = s.bloomRadius;
     this.renderer.toneMappingExposure = s.exposure;
-    this.ambient.setDensity(s.dustDensity, s.streamDensity);
-    this.ambient.setScale(s.dustScale, s.streamScale);
-    this.net.setDensity(s.networkDensity);
-    this.office.setLighting(s.hqLighting);
+    this.safeCall(this.ambient, "setDensity", s.dustDensity, s.streamDensity);
+    this.safeCall(this.ambient, "setScale", s.dustScale, s.streamScale);
+    this.safeCall(this.net, "setDensity", s.networkDensity);
+    this.safeCall(this.office, "setLighting", s.hqLighting);
+    this.safeCall(this.office, "setMaterials", { holoOpacity: s.holoOpacity });
+    this.safeCall(this.office, "setParticles", { density: s.dustDensity });
 
     const fog = this.scene.fog as THREE.FogExp2;
     fog.density = 0.008 + s.atmosphere * 0.034;
 
     if (force || s.tint !== this.lastTint) {
       this.lastTint = s.tint;
-      this.arc.setTint(s.tint);
-      this.beam.setTint(s.tint);
+      this.safeCall(this.arc, "setTint", s.tint);
+      this.safeCall(this.beam, "setTint", s.tint);
     }
     if (force || s.emissive !== this.lastEmissive) {
       this.lastEmissive = s.emissive;
-      this.arc.setEmissive(s.emissive);
+      this.safeCall(this.arc, "setEmissive", s.emissive);
     }
-    this.beam.setDensity(s.streamDensity);
-    this.beam.setScale(s.streamScale);
+    this.safeCall(this.beam, "setDensity", s.streamDensity);
+    this.safeCall(this.beam, "setScale", s.streamScale);
     this.beam.setIntensityScale(s.coreIntensity);
 
     if (force || s.coreGeometry !== this.lastGeometry) {
@@ -459,7 +486,9 @@ export class VortexEngine {
   }
 
   private update(): void {
-    const dt = clamp(this.clock.getDelta(), 0, 0.05);
+    const nowMs = performance.now();
+    const dt = clamp((nowMs - this.lastFrameMs) / 1000, 0, 0.05);
+    this.lastFrameMs = nowMs;
     this.time += dt;
     this.fps.tick();
 

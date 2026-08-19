@@ -67,6 +67,16 @@ export class OfficeScene {
   private warnPulse = 0;
   private rosterVersion = -1;
 
+  /* Visual Control Lab proxies — engine-bound scene lights + holo/particle knobs */
+  private hemi: THREE.HemisphereLight | null = null;
+  private key: THREE.DirectionalLight | null = null;
+  private rim: THREE.DirectionalLight | null = null;
+  private lightMul = 1;
+  private holoMul = 1;
+  private screenMats: THREE.MeshBasicMaterial[] = [];
+  private glowMats: THREE.MeshStandardMaterial[] = [];
+  private localMat: THREE.ShaderMaterial | null = null;
+
   constructor() {
     this.buildGraph();
     this.buildEnvironment();
@@ -84,6 +94,35 @@ export class OfficeScene {
         ag.progress = 0;
       }
     });
+  }
+
+  /* ---------------- engine proxy API (guarded, never throws) ---------------- */
+
+  /** engine hands over the scene lights so HQ lighting can own them */
+  bindLights(hemi: THREE.HemisphereLight, key: THREE.DirectionalLight, rim: THREE.DirectionalLight): void {
+    this.hemi = hemi;
+    this.key = key;
+    this.rim = rim;
+  }
+
+  /** HQ lighting scalar 0..3 — environment brightness, haze feel, agent visibility */
+  setLighting(v: number): void {
+    this.lightMul = clamp(v, 0, 3);
+    if (this.hemi) this.hemi.intensity = 0.75 * this.lightMul;
+    if (this.key) this.key.intensity = 1.5 * this.lightMul;
+    if (this.rim) this.rim.intensity = 0.8 * this.lightMul;
+  }
+
+  /** obsidian surface / holographic-glass shader scalar */
+  setMaterials(p: { holoOpacity: number }): void {
+    this.holoMul = clamp(p.holoOpacity, 0, 1);
+    for (const m of this.screenMats) m.opacity = 0.96 * Math.max(0.08, this.holoMul);
+    for (const m of this.glowMats) m.emissiveIntensity = 1.5 * (0.35 + this.holoMul);
+  }
+
+  /** local desk / agent ember-and-dust density matrix */
+  setParticles(p: { density: number }): void {
+    if (this.localMat) this.localMat.uniforms.uDensity.value = clamp(p.density, 0, 1);
   }
 
   /* ---------------- waypoint navigation graph ---------------- */
@@ -247,6 +286,57 @@ export class OfficeScene {
 
     // workstations
     for (let i = 0; i < 8; i++) this.buildDesk(i);
+
+    this.buildLocalParticles();
+  }
+
+  /** rising embers + idle dust above the HQ floor — density-matrix driven */
+  private buildLocalParticles(): void {
+    const N = 1400;
+    const pos = new Float32Array(N * 3);
+    const seed = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const a = Math.random() * TAU;
+      const r = 1.2 + Math.random() * 8.4;
+      pos[i * 3] = Math.cos(a) * r;
+      pos[i * 3 + 1] = Math.random() * 3.4;
+      pos[i * 3 + 2] = Math.sin(a) * r;
+      seed[i] = Math.random();
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("aSeed", new THREE.BufferAttribute(seed, 1));
+    this.localMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uDensity: { value: 0.85 } },
+      vertexShader: `
+        attribute float aSeed;
+        uniform float uTime; uniform float uDensity;
+        varying float vA;
+        void main(){
+          vec3 p = position;
+          float speed = 0.15 + aSeed * 0.35;
+          p.y = mod(p.y + uTime * speed, 3.4);
+          p.x += sin(uTime * 0.6 + aSeed * 40.0) * 0.25;
+          p.z += cos(uTime * 0.5 + aSeed * 31.0) * 0.25;
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          gl_PointSize = (1.0 + aSeed * 1.6) * (120.0 / -mv.z);
+          vA = step(aSeed, uDensity) * (0.35 + 0.65 * aSeed) * smoothstep(3.4, 2.6, p.y);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        varying float vA;
+        void main(){
+          vec2 c = gl_PointCoord - 0.5;
+          float a = smoothstep(0.5, 0.05, length(c));
+          gl_FragColor = vec4(vec3(0.0, 0.9, 1.0) * 0.8 + vec3(0.83, 0.69, 0.22) * 0.4, a * a * vA * 0.5);
+        }`,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const pts = new THREE.Points(geo, this.localMat);
+    pts.frustumCulled = false;
+    this.group.add(pts);
   }
 
   private floorMat: THREE.ShaderMaterial | null = null;
@@ -279,18 +369,16 @@ export class OfficeScene {
     if (ctx) {
       this.screens.push({ ctx, tex, role, acc: Math.random() * 0.2, seed: Math.random() * 100 });
     }
-    const screen = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.24, 0.72),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.96, toneMapped: false, side: THREE.DoubleSide })
-    );
+    const screenMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.96, toneMapped: false, side: THREE.DoubleSide });
+    this.screenMats.push(screenMat);
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(1.24, 0.72), screenMat);
     screen.position.set(0, 1.62, -0.12);
     screen.rotation.x = -0.12;
     g.add(screen);
 
-    const underglow = new THREE.Mesh(
-      new THREE.BoxGeometry(1.3, 0.02, 0.05),
-      new THREE.MeshStandardMaterial({ color: 0x04252a, emissive: 0x00f0ff, emissiveIntensity: 1.5, metalness: 0.4, roughness: 0.4 })
-    );
+    const glowMat = new THREE.MeshStandardMaterial({ color: 0x04252a, emissive: 0x00f0ff, emissiveIntensity: 1.5, metalness: 0.4, roughness: 0.4 });
+    this.glowMats.push(glowMat);
+    const underglow = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.02, 0.05), glowMat);
     underglow.position.set(0, 0.975, 0.34);
     g.add(underglow);
 
@@ -538,6 +626,7 @@ export class OfficeScene {
       this.buildRoster(st.agentDefs);
     }
     if (this.floorMat) this.floorMat.uniforms.uTime.value = time;
+    if (this.localMat) this.localMat.uniforms.uTime.value = time;
     this.tableHolo.rotation.y += dt * 0.5;
     this.tableHolo.rotation.x = Math.sin(time * 0.4) * 0.2;
     this.tableGlow.opacity = 0.3 + (this.briefing > 0 ? 0.45 : 0) + Math.sin(time * 2) * 0.05;
