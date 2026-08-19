@@ -27,13 +27,15 @@ export interface CoreSettings {
   dof: boolean;
 }
 
+/* tuned so the core orb blooms without washing the frame white:
+   threshold sits above ambient luminance, strength stays filmic */
 export const DEFAULT_SETTINGS: CoreSettings = {
   tint: "#00f0ff",
   speed: 1,
-  bloomStrength: 0.85,
-  bloomThreshold: 0.3,
-  bloomRadius: 0.55,
-  exposure: 1.12,
+  bloomStrength: 0.62,
+  bloomThreshold: 0.55,
+  bloomRadius: 0.42,
+  exposure: 1.0,
   emissive: 1,
   dustDensity: 0.85,
   dustScale: 1,
@@ -48,11 +50,11 @@ export interface SettingsPreset {
 }
 
 export const SETTINGS_PRESETS: SettingsPreset[] = [
-  { name: "NOCTURNE", patch: { tint: "#00f0ff", speed: 1, bloomStrength: 0.85, exposure: 1.12, emissive: 1 } },
-  { name: "SOLAR", patch: { tint: "#ffb700", bloomStrength: 1.0, exposure: 1.22, emissive: 1.15, speed: 1.2 } },
-  { name: "EMERALD", patch: { tint: "#00ff66", bloomStrength: 0.9, exposure: 1.08, emissive: 1.05 } },
-  { name: "CRIMSON", patch: { tint: "#ff3333", bloomStrength: 1.05, exposure: 1.15, emissive: 1.25, speed: 1.5 } },
-  { name: "OVERDRIVE", patch: { tint: "#d4af37", speed: 2.6, bloomStrength: 1.3, emissive: 1.6, streamDensity: 1, dustDensity: 1 } },
+  { name: "NOCTURNE", patch: { tint: "#00f0ff", speed: 1, bloomStrength: 0.55, bloomThreshold: 0.6, exposure: 0.95, emissive: 0.9 } },
+  { name: "SOLAR", patch: { tint: "#ffb700", bloomStrength: 0.72, bloomThreshold: 0.5, exposure: 1.04, emissive: 1.05, speed: 1.2 } },
+  { name: "EMERALD", patch: { tint: "#00ff66", bloomStrength: 0.62, bloomThreshold: 0.55, exposure: 0.98, emissive: 1.0 } },
+  { name: "CRIMSON", patch: { tint: "#ff3333", bloomStrength: 0.78, bloomThreshold: 0.5, exposure: 1.02, emissive: 1.1, speed: 1.5 } },
+  { name: "OVERDRIVE", patch: { tint: "#d4af37", speed: 2.6, bloomStrength: 0.95, bloomThreshold: 0.42, exposure: 1.1, emissive: 1.3, streamDensity: 1, dustDensity: 1 } },
 ];
 
 export const TINT_SWATCHES: string[] = [
@@ -67,7 +69,8 @@ export const TINT_SWATCHES: string[] = [
   "#e0e6ed",
 ];
 
-const SETTINGS_KEY = "vortex.settings.v1";
+/* v2 — discards any persisted over-bright bloom values from earlier runs */
+const SETTINGS_KEY = "vortex.settings.v2";
 
 function loadSettings(): CoreSettings {
   try {

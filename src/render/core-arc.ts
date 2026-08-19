@@ -233,6 +233,7 @@ export class CoreArc {
           float fr = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.0);
           float core = 0.72 + 0.28 * sin(uTime * 3.1) * sin(uTime * 1.7 + 1.0);
           vec3 col = uColor * (fr * 2.6 + core * 0.9) * uIntensity * (1.0 + uAudio * 1.2);
+          col = col / (1.0 + 0.24 * col); /* filmic knee — no white-out feed to bloom */
           gl_FragColor = vec4(col, 1.0);
         }`,
       toneMapped: false,
@@ -526,7 +527,7 @@ export class CoreArc {
       bm.opacity = this.beamCur * (0.24 + 0.2 * Math.sin(time * 9) * this.flickerCur + levels.bass * 0.25);
       bm.color.copy(this.tint);
     }
-    this.orbLight.intensity = 18 + this.plasmaCur * 14 + levels.bass * 22 + this.successGlow * 40;
+    this.orbLight.intensity = 10 + this.plasmaCur * 8 + levels.bass * 10 + this.successGlow * 20;
     this.orbLight.color.copy(this.tint).lerp(GOLD, this.successGlow * 0.6);
 
     /* glyph columns scroll */

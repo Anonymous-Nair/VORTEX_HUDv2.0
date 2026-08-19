@@ -1,46 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import type { GestureKind, TabId } from "../types";
 import { useVortex } from "../store/vortex-store";
 import { createEngine, destroyEngine, getEngine } from "../render/engine";
 import { simulator } from "../state/simulator";
 import { synth } from "../audio/synth";
-import { bus } from "../store/event-bus";
-import { getGesturePipeline, startGesturePipeline } from "../vision/vision";
 import { MissionMap } from "./MissionMap";
 import { MemoryGraph } from "./MemoryGraph";
 import { HolographicLayer } from "./HolographicLayer";
-import { CoreControlLab } from "./CoreControlLab";
-
-const TAB_ORDER: TabId[] = ["core", "agents", "intel", "missions", "network", "memory"];
-
-/** live vision/gesture readout chip */
-function GestureChip(): JSX.Element {
-  const [last, setLast] = useState<{ gesture: GestureKind; at: number } | null>(null);
-  useEffect(() => {
-    const off = bus.on("GESTURE_DETECTED", ({ gesture }) => {
-      setLast({ gesture, at: performance.now() });
-    });
-    return off;
-  }, []);
-  const pipeline = getGesturePipeline();
-  return (
-    <div className="gesture-chip">
-      <span className="g-dot" />
-      <span>
-        VISION <b>{pipeline.vision.mode}</b>
-      </span>
-      <span>
-        HAND <b>{pipeline.hand.mode}</b>
-      </span>
-      <span>
-        GESTURE{" "}
-        <b style={{ color: last && performance.now() - last.at < 1500 ? "var(--cyan)" : "var(--faint)" }}>
-          {last ? last.gesture : "——"}
-        </b>
-      </span>
-    </div>
-  );
-}
 
 const TAB_TITLES: Record<string, { title: string; sub: string }> = {
   core: { title: "CENTRAL CORE", sub: "monumental energy arc · plasma conduit array" },
@@ -91,23 +56,6 @@ export function Viewport(): JSX.Element {
     const id = setTimeout(() => setWarp(false), 720);
     return () => clearTimeout(id);
   }, [tab]);
-
-  /* vision & gesture pipeline — a SWIPE flick cycles sectors */
-  useEffect(() => {
-    const pipeline = startGesturePipeline();
-    const off = bus.on("GESTURE_DETECTED", ({ gesture }) => {
-      if (gesture !== "SWIPE") return;
-      const st = useVortex.getState();
-      const idx = TAB_ORDER.indexOf(st.tab);
-      const next = TAB_ORDER[(idx + 1) % TAB_ORDER.length];
-      st.setTab(next);
-      st.pushLog("info", "GESTURE", `SWIPE recognized — sector cycled to ${next.toUpperCase()}`);
-    });
-    return () => {
-      off();
-      pipeline.stop();
-    };
-  }, []);
 
   const meta = TAB_TITLES[tab];
   const dim2d = tab === "missions" || tab === "memory";
