@@ -4,11 +4,18 @@ import { GLYPHS } from "../data/defaults";
 import { TAU, clamp, damp, lerp } from "../utils/math";
 
 /* ============================================================
-   THE MONUMENTAL MECHANICAL ARC
+   THE MONUMENTAL MECHANICAL ARC — PHASE 3 ENHANCEMENT
    Obsidian nano-metal frame · neon-cyan plasma conduits · gyro rings
    magnetic containment beams · iris shutters · data conduits ·
    holographic glyph columns · mirror obsidian platform with
    liquid-light ripples. NOT a planet. NOT a flat ring.
+   
+   ENHANCEMENTS:
+   - Layered energy field with micro-pulses
+   - State-reactive orbital turbulence
+   - Signal trace propagation
+   - Fine procedural noise/turbulence
+   - Controlled bloom/glow hierarchy
    ============================================================ */
 
 interface StateParams {
@@ -17,16 +24,20 @@ interface StateParams {
   beam: number;
   iris: number;
   flicker: number;
+  turbulence: number;    // orbital chaos factor
+  pulseRate: number;     // micro-pulse frequency
+  glowIntensity: number; // bloom hierarchy
+  signalSpeed: number;   // data conduit velocity
 }
 
 const STATE_PARAMS: Record<CoreState, StateParams> = {
-  IDLE: { spin: 0.16, plasma: 1.0, beam: 0.22, iris: 0.08, flicker: 0.1 },
-  LISTENING: { spin: 0.34, plasma: 1.5, beam: 0.5, iris: 0.28, flicker: 0.2 },
-  THINKING: { spin: 0.95, plasma: 2.5, beam: 0.85, iris: 1.0, flicker: 0.55 },
-  TOOL_USE: { spin: 1.7, plasma: 2.9, beam: 1.0, iris: 0.82, flicker: 0.7 },
-  SPEAKING: { spin: 0.72, plasma: 2.3, beam: 0.9, iris: 0.6, flicker: 0.45 },
-  ERROR: { spin: 2.3, plasma: 3.4, beam: 1.0, iris: 1.0, flicker: 1.0 },
-  SUCCESS: { spin: 0.5, plasma: 2.7, beam: 1.0, iris: 0.5, flicker: 0.28 },
+  IDLE: { spin: 0.16, plasma: 1.0, beam: 0.22, iris: 0.08, flicker: 0.1, turbulence: 0.05, pulseRate: 0.3, glowIntensity: 0.6, signalSpeed: 0.2 },
+  LISTENING: { spin: 0.34, plasma: 1.5, beam: 0.5, iris: 0.28, flicker: 0.2, turbulence: 0.12, pulseRate: 0.6, glowIntensity: 0.75, signalSpeed: 0.35 },
+  THINKING: { spin: 0.95, plasma: 2.5, beam: 0.85, iris: 1.0, flicker: 0.55, turbulence: 0.45, pulseRate: 1.2, glowIntensity: 1.0, signalSpeed: 0.8 },
+  TOOL_USE: { spin: 1.7, plasma: 2.9, beam: 1.0, iris: 0.82, flicker: 0.7, turbulence: 0.65, pulseRate: 1.5, glowIntensity: 1.1, signalSpeed: 1.2 },
+  SPEAKING: { spin: 0.72, plasma: 2.3, beam: 0.9, iris: 0.6, flicker: 0.45, turbulence: 0.25, pulseRate: 0.9, glowIntensity: 0.85, signalSpeed: 0.5 },
+  ERROR: { spin: 2.3, plasma: 3.4, beam: 1.0, iris: 1.0, flicker: 1.0, turbulence: 0.9, pulseRate: 2.0, glowIntensity: 1.2, signalSpeed: 1.5 },
+  SUCCESS: { spin: 0.5, plasma: 2.7, beam: 1.0, iris: 0.5, flicker: 0.28, turbulence: 0.15, pulseRate: 0.5, glowIntensity: 1.3, signalSpeed: 0.6 },
 };
 
 const CYAN = new THREE.Color("#00f0ff");
@@ -69,11 +80,16 @@ export class CoreArc {
   private beamCur = 0.2;
   private irisCur = 0.1;
   private flickerCur = 0.1;
+  private turbulenceCur = 0.05;
+  private pulseRateCur = 0.3;
+  private glowIntensityCur = 0.6;
+  private signalSpeedCur = 0.2;
   private tint = new THREE.Color("#00f0ff");
   private tintTarget = new THREE.Color("#00f0ff");
   private userTint = new THREE.Color("#00f0ff");
   private emissiveScale = 1;
   private successGlow = 0;
+  private microPulsePhase = 0;
 
   /** Core Control Lab — live plasma tint (conduits, orb, beams, rings) */
   setTint(hex: string): void {
@@ -525,8 +541,13 @@ export class CoreArc {
     this.beamCur = damp(this.beamCur, p.beam, 3, dt);
     this.irisCur = damp(this.irisCur, p.iris, 3, dt);
     this.flickerCur = damp(this.flickerCur, p.flicker, 3, dt);
+    this.turbulenceCur = damp(this.turbulenceCur, p.turbulence, 2.5, dt);
+    this.pulseRateCur = damp(this.pulseRateCur, p.pulseRate, 2.8, dt);
+    this.glowIntensityCur = damp(this.glowIntensityCur, p.glowIntensity, 2.2, dt);
+    this.signalSpeedCur = damp(this.signalSpeedCur, p.signalSpeed, 3, dt);
     this.successGlow = Math.max(0, this.successGlow - dt * 0.9);
     this.tint.lerp(this.tintTarget, k);
+    this.microPulsePhase += dt * (6 + p.pulseRate * 12);
 
     const flick = 1 + this.flickerCur * 0.45 * Math.sin(time * 31 + Math.sin(time * 7.3) * 4);
 
@@ -542,26 +563,28 @@ export class CoreArc {
       mat.emissiveIntensity = 0.8 + this.plasmaCur * 0.5 * flick + levels.high * 1.2;
     }
 
-    /* rings gyro */
+    /* rings gyro — add turbulence for state-reactive orbital chaos */
     const spin = this.spinVel;
-    this.rings[0].rotation.x += dt * spin * 1.4;
-    this.rings[0].rotation.y += dt * spin * 0.9;
-    this.rings[1].rotation.y -= dt * spin * 1.9;
-    this.rings[1].rotation.z += dt * spin * 0.6;
-    this.rings[2].rotation.z += dt * spin * 1.1;
-    this.rings[2].rotation.x -= dt * spin * 0.4;
-    this.rings[1].scale.setScalar(1 + levels.bass * 0.08);
+    const turb = this.turbulenceCur;
+    const microPulse = Math.sin(this.microPulsePhase) * 0.5 + Math.cos(this.microPulsePhase * 2.3) * 0.25;
+    this.rings[0].rotation.x += dt * spin * 1.4 * (1 + turb * 0.8);
+    this.rings[0].rotation.y += dt * spin * 0.9 * (1 + turb * 0.6);
+    this.rings[1].rotation.y -= dt * spin * 1.9 * (1 + turb * 1.2);
+    this.rings[1].rotation.z += dt * spin * 0.6 * (1 + turb * 0.4);
+    this.rings[2].rotation.z += dt * spin * 1.1 * (1 + turb * 0.7);
+    this.rings[2].rotation.x -= dt * spin * 0.4 * (1 + turb * 0.5);
+    this.rings[1].scale.setScalar(1 + levels.bass * 0.08 + microPulse * turb * 0.12);
 
     /* Orion interlock — counter-rotating gold construct, breathes with the core */
-    this.interlock.rotation.y -= dt * spin * 2.3;
-    this.interlock.rotation.z = Math.sin(time * 0.9) * 0.16 * (0.3 + this.irisCur);
+    this.interlock.rotation.y -= dt * spin * 2.3 * (1 + turb * 0.5);
+    this.interlock.rotation.z = Math.sin(time * 0.9) * 0.16 * (0.3 + this.irisCur) + microPulse * turb * 0.08;
     const interlockMat = this.interlock.material as THREE.MeshBasicMaterial;
-    interlockMat.opacity = 0.45 + this.plasmaCur * 0.14 + levels.mid * 0.3;
-    this.interlock.scale.setScalar(1 + levels.bass * 0.05 + this.successGlow * 0.12);
+    interlockMat.opacity = 0.45 + this.plasmaCur * 0.14 + levels.mid * 0.3 + this.glowIntensityCur * 0.1;
+    this.interlock.scale.setScalar(1 + levels.bass * 0.05 + this.successGlow * 0.12 + microPulse * turb * 0.06);
 
     /* targeting tick ring — razor ticks orbit + shimmer on the high band */
-    this.tickRing.rotation.y += dt * (0.25 + spin * 1.1);
-    this.tickMat.opacity = 0.5 + levels.high * 0.45 + this.irisCur * 0.2 + this.successGlow * 0.3;
+    this.tickRing.rotation.y += dt * (0.25 + spin * 1.1) * (1 + turb * 0.4);
+    this.tickMat.opacity = 0.5 + levels.high * 0.45 + this.irisCur * 0.2 + this.successGlow * 0.3 + this.glowIntensityCur * 0.15;
     this.tickMat.color.copy(this.tint).lerp(GOLD, this.successGlow * 0.8);
 
     /* iris shutters */
@@ -596,9 +619,9 @@ export class CoreArc {
     this.orbLight.intensity = 10 + this.plasmaCur * 8 + levels.bass * 10 + this.successGlow * 20;
     this.orbLight.color.copy(this.tint).lerp(GOLD, this.successGlow * 0.6);
 
-    /* glyph columns scroll */
+    /* glyph columns scroll — speed reacts to signalSpeed and state */
     for (const gc of this.glyphCols) {
-      gc.acc += dt;
+      gc.acc += dt * (1 + this.signalSpeedCur * 2);
       if (gc.acc > 0.11) {
         gc.acc = 0;
         const { ctx } = gc;
@@ -609,19 +632,24 @@ export class CoreArc {
         let row = "";
         for (let i = 0; i < 5; i++) row += GLYPHS[Math.floor(Math.random() * GLYPHS.length)];
         ctx.fillStyle = Math.random() < 0.22 ? "#ffb700" : "#00f0ff";
+        ctx.globalAlpha = 0.7 + this.glowIntensityCur * 0.3;
         ctx.fillText(row, 4, 378);
+        ctx.globalAlpha = 1.0;
         gc.tex.needsUpdate = true;
       }
     }
 
-    /* glyph motes orbit */
-    this.glyphRing.rotation.y += dt * (0.25 + spin * 0.8);
-    (this.glyphRing.material as THREE.PointsMaterial).opacity = 0.4 + levels.high * 0.5 + this.irisCur * 0.25;
+    /* glyph motes orbit — add turbulence-driven wobble */
+    this.glyphRing.rotation.y += dt * (0.25 + spin * 0.8) * (1 + turb * 0.6);
+    const moteMat = this.glyphRing.material as THREE.PointsMaterial;
+    moteMat.opacity = 0.4 + levels.high * 0.5 + this.irisCur * 0.25 + this.glowIntensityCur * 0.2;
+    moteMat.size = 0.045 * (1 + microPulse * turb * 0.4);
 
-    /* conduit pulses */
+    /* conduit pulses — speed modulated by signalSpeed parameter */
     for (const cp of this.conduitPulses) {
-      const t = (time * (0.22 + spin * 0.25) + cp.offset) % 1;
+      const t = (time * (0.22 + spin * 0.25 + this.signalSpeedCur * 0.8) + cp.offset) % 1;
       cp.curve.getPoint(t, cp.mesh.position);
+      cp.mesh.scale.setScalar(1 + Math.sin(time * 8 + cp.offset * 6.28) * 0.15 * this.pulseRateCur);
     }
 
     /* ripple platform */
