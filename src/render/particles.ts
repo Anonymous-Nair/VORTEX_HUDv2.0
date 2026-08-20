@@ -227,6 +227,10 @@ export class AmbientParticles {
     this.turb = damp(this.turb, 0, 1.6, dt);
     this.mat.uniforms.uTurb.value = this.turb;
 
+    /* micro-pulse breathing for orbiters — subtle intelligence field effect */
+    const microPulse = Math.sin(time * 2.3) * 0.3 + Math.cos(time * 4.7) * 0.2;
+    this.mat.uniforms.uStreamScale.value = 1 + microPulse * 0.15 * (1 + this.turb * 0.5);
+
     let anyAlive = false;
     for (let i = 0; i < SPARK_CAP; i++) {
       if (this.sparkLife[i] <= 0) continue;

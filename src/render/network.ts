@@ -220,10 +220,11 @@ export class NetworkViz {
   }
 
   update(dt: number, time: number): void {
-    /* packets */
+    /* packets — speed modulated by subtle intelligence pulse */
+    const intelligencePulse = 1 + Math.sin(time * 1.7) * 0.15 + Math.cos(time * 3.4) * 0.1;
     const next: Packet[] = [];
     for (const p of this.packets) {
-      p.t += dt * p.speed * 1.35;
+      p.t += dt * p.speed * 1.35 * intelligencePulse;
       if (p.t >= 1) {
         const [a, b] = this.edges[p.edge];
         this.activation[b] = 1;
@@ -253,7 +254,7 @@ export class NetworkViz {
         const pa = this.nodePos[a];
         const pb = this.nodePos[b];
         const t = p.t;
-        const bump = Math.sin(t * Math.PI) * 0.22;
+        const bump = Math.sin(t * Math.PI) * 0.22 * intelligencePulse;
         this.packetPos[i * 3] = pa.x + (pb.x - pa.x) * t;
         this.packetPos[i * 3 + 1] = pa.y + (pb.y - pa.y) * t + bump;
         this.packetPos[i * 3 + 2] = pa.z + (pb.z - pa.z) * t;
@@ -285,14 +286,14 @@ export class NetworkViz {
     }
     if (this.nodes.instanceColor) this.nodes.instanceColor.needsUpdate = true;
 
-    /* edge colors follow endpoint activation */
+    /* edge colors follow endpoint activation with micro-pulse shimmer */
+    const edgeShimmer = 0.05 + Math.sin(time * 1.3) * 0.015 + Math.cos(time * 2.7) * 0.008;
     for (let e = 0; e < this.edges.length; e++) {
       const [a, b] = this.edges[e];
       const heat = clamp(Math.max(this.activation[a], this.activation[b]), 0, 1);
-      const base = 0.05 + Math.sin(time * 1.3 + e) * 0.015;
-      const r = this.cyan.r * base + this.gold.r * heat * 0.9;
-      const g = this.cyan.g * base + this.gold.g * heat * 0.9;
-      const bl = this.cyan.b * base + this.gold.b * heat * 0.9;
+      const r = this.cyan.r * edgeShimmer + this.gold.r * heat * 0.9;
+      const g = this.cyan.g * edgeShimmer + this.gold.g * heat * 0.9;
+      const bl = this.cyan.b * edgeShimmer + this.gold.b * heat * 0.9;
       this.edgeColors[e * 6] = r;
       this.edgeColors[e * 6 + 1] = g;
       this.edgeColors[e * 6 + 2] = bl;
