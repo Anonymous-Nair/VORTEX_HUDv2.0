@@ -2,28 +2,24 @@ import * as THREE from "three";
 import type { AudioLevels, CoreState } from "../types";
 import { TAU, damp } from "../utils/math";
 
-/**
- * VORTEX 2D RADIAL COMPUTATIONAL CORE
- * Front-facing intelligence instrument — NOT a 3D reactor
- * Built with Three.js Line/Points for GPU efficiency but rendered as flat 2D HUD
- */
-
 interface StateParams {
   activity: number;
   signalSpeed: number;
   glowIntensity: number;
   turbulence: number;
   pulseRate: number;
+  rotationSpeed: number;
+  stepLockSpeed: number;
 }
 
 const STATE_PARAMS: Record<CoreState, StateParams> = {
-  IDLE:       { activity: 0.15, signalSpeed: 0.2, glowIntensity: 0.4, turbulence: 0.02, pulseRate: 0.3 },
-  LISTENING:  { activity: 0.35, signalSpeed: 0.4, glowIntensity: 0.55, turbulence: 0.05, pulseRate: 0.5 },
-  THINKING:   { activity: 0.85, signalSpeed: 0.9, glowIntensity: 0.8, turbulence: 0.25, pulseRate: 1.1 },
-  TOOL_USE:   { activity: 0.95, signalSpeed: 1.0, glowIntensity: 0.9, turbulence: 0.35, pulseRate: 1.3 },
-  SPEAKING:   { activity: 0.6, signalSpeed: 0.55, glowIntensity: 0.65, turbulence: 0.12, pulseRate: 0.75 },
-  ERROR:      { activity: 0.7, signalSpeed: 0.8, glowIntensity: 0.75, turbulence: 0.6, pulseRate: 1.5 },
-  SUCCESS:    { activity: 0.8, signalSpeed: 0.7, glowIntensity: 0.95, turbulence: 0.08, pulseRate: 0.5 },
+  IDLE:       { activity: 0.15, signalSpeed: 0.2, glowIntensity: 0.4, turbulence: 0.02, pulseRate: 0.3, rotationSpeed: 0.3, stepLockSpeed: 0.02 },
+  LISTENING:  { activity: 0.35, signalSpeed: 0.4, glowIntensity: 0.55, turbulence: 0.05, pulseRate: 0.5, rotationSpeed: 0.5, stepLockSpeed: 0.04 },
+  THINKING:   { activity: 0.85, signalSpeed: 0.9, glowIntensity: 0.8, turbulence: 0.25, pulseRate: 1.1, rotationSpeed: 1.0, stepLockSpeed: 0.12 },
+  TOOL_USE:   { activity: 0.95, signalSpeed: 1.0, glowIntensity: 0.9, turbulence: 0.35, pulseRate: 1.3, rotationSpeed: 1.3, stepLockSpeed: 0.18 },
+  SPEAKING:   { activity: 0.6, signalSpeed: 0.55, glowIntensity: 0.65, turbulence: 0.12, pulseRate: 0.75, rotationSpeed: 0.6, stepLockSpeed: 0.06 },
+  ERROR:      { activity: 0.7, signalSpeed: 0.8, glowIntensity: 0.75, turbulence: 0.6, pulseRate: 1.5, rotationSpeed: 0.2, stepLockSpeed: 0.08 },
+  SUCCESS:    { activity: 0.8, signalSpeed: 0.7, glowIntensity: 0.95, turbulence: 0.08, pulseRate: 0.5, rotationSpeed: 0.8, stepLockSpeed: 0.1 },
 };
 
 const CYAN = new THREE.Color("#00f0ff");
@@ -31,558 +27,375 @@ const GOLD = new THREE.Color("#d4af37");
 const RED = new THREE.Color("#ff3333");
 const DIM_CYAN = new THREE.Color("#003344");
 const WHITE = new THREE.Color("#aaccff");
+const TEAL = new THREE.Color("#1a9fb0");
+const GREEN = new THREE.Color("#2ee6a6");
 
 export class CoreArc {
   readonly group = new THREE.Group();
-  readonly platform = new THREE.Group(); // kept for API compatibility
+  readonly platform = new THREE.Group();
 
-  // Layer A: Primary Arc (outer command boundary)
   private outerRing!: THREE.Line;
   private outerRingMat!: THREE.ShaderMaterial;
-  
-  // Layer B: Segmented instrumentation rings (multiple)
-  private segmentRings: Array<{ mesh: THREE.Line; mat: THREE.ShaderMaterial; segments: number[] }> = [];
-  
-  // Layer C: Radial sectors with tick marks
-  private tickRing!: THREE.InstancedMesh;
-  private tickMat!: THREE.MeshBasicMaterial;
-  private tickCount = 128;
-  
-  // Layer D: Signal orbit paths (thin orbital lines with traveling pulses)
-  private signalPaths: Array<{ ring: THREE.Line; mat: THREE.ShaderMaterial; signals: Float32Array }> = [];
-  private signalCount = 18;
-  
-  // Layer E: Inner computational field (radial lines + micro segments)
-  private innerFieldLines!: THREE.LineSegments;
-  private innerFieldMat!: THREE.ShaderMaterial;
-  
-  // Layer F: Central intelligence nucleus (2D computational core, NOT a sphere)
-  private nucleusGroup!: THREE.Group;
-  private nucleusRings: THREE.Line[] = [];
-  private nucleusCrosshair!: THREE.LineSegments;
-  private nucleusMat!: THREE.ShaderMaterial;
-  
-  // Layer G: Micro typography markers (represented as small geometry clusters)
-  private markerPoints!: THREE.Points;
-  private markerPositions!: Float32Array;
-  
-  // State & animation
+  private stepLockRing!: THREE.Line;
+  private stepLockMat!: THREE.ShaderMaterial;
+  private radarSweep!: THREE.Mesh;
+  private radarSweepMat!: THREE.ShaderMaterial;
+  private innerTickRing!: THREE.LineSegments;
+  private innerTickMat!: THREE.ShaderMaterial;
+  private centerGaugeGroup!: THREE.Group;
+  private centerGaugeMat!: THREE.ShaderMaterial;
+  private sectorLines!: THREE.LineSegments;
+  private sectorMat!: THREE.ShaderMaterial;
+  private signalParticles!: THREE.Points;
+  private signalParticleMat!: THREE.PointsMaterial;
+  private signalParticlePositions!: Float32Array;
+  private signalParticleTimes!: Float32Array;
+  private pingRing!: THREE.LineLoop;
+  private pingRingMat!: THREE.ShaderMaterial;
+
+  private stepLockAngle = 0;
+  private stepLockTarget = 0;
+  private stepLockTimer = 0;
+  private centerValue = 0;
+  private centerTargetValue = 50;
+  private signalCount = 24;
+  private pingRingScale = 0;
+  private pingRingActive = false;
   private stateParamsCur = { ...STATE_PARAMS.IDLE };
   private targetParams = { ...STATE_PARAMS.IDLE };
   private time = 0;
   private breathPhase = 0;
-  private pulsePhase = 0;
   private flashT = -1;
   private errorShake = 0;
-  
-  // Color control
+  private outerRotation = 0;
+  private radarRotation = 0;
   private tint = new THREE.Color("#00f0ff");
   private userTint = new THREE.Color("#00f0ff");
 
   constructor() {
     this._buildOuterRing();
-    this._buildSegmentRings();
-    this._buildTickRing();
-    this._buildSignalPaths();
-    this._buildInnerField();
-    this._buildNucleus();
-    this._buildMarkers();
+    this._buildStepLockRing();
+    this._buildRadarSweep();
+    this._buildInnerTickRing();
+    this._buildCenterGauge();
+    this._buildSectorLines();
+    this._buildSignalParticles();
+    this._buildPingRing();
   }
 
   private _buildOuterRing(): void {
-    // Large circular boundary with segmented appearance
-    const points = new Float32Array(256 * 3);
+    const points = new Float32Array(512 * 3);
     const radius = 3.8;
-    
-    for (let i = 0; i < 256; i++) {
-      const angle = (i / 256) * TAU;
-      // Create subtle gaps and variations
-      let r = radius;
-      const segmentIdx = Math.floor(i / 16);
-      if (segmentIdx % 7 === 0 || segmentIdx % 11 === 0) {
-        r *= 0.97; // subtle gap
+    for (let i = 0; i < 512; i++) {
+      const angle = (i / 512) * TAU;
+      const segmentIdx = Math.floor(i / 8);
+      const withinSegment = i % 8;
+      let r: number;
+      if (segmentIdx % 7 === 0) {
+        const gapProgress = withinSegment / 8;
+        r = radius * (0.92 + 0.08 * Math.sin(gapProgress * Math.PI));
+      } else {
+        r = radius + Math.sin(angle * 32) * 0.02 + Math.sin(angle * 8) * 0.01;
       }
-      // Add micro-variations for technical feel
-      r += Math.sin(angle * 24) * 0.015;
-      
       points[i * 3] = Math.cos(angle) * r;
-      points[i * 3 + 1] = 0; // flat 2D
+      points[i * 3 + 1] = 0;
       points[i * 3 + 2] = Math.sin(angle) * r;
     }
-    
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(points, 3));
-    
     this.outerRingMat = new THREE.ShaderMaterial({
-      uniforms: {
-        uTime: { value: 0 },
-        uColor: { value: CYAN },
-        uIntensity: { value: 0.5 },
-        uDashOffset: { value: 0 },
-      },
-      vertexShader: `
-        uniform float uTime;
-        varying vec3 vColor;
-        uniform vec3 uColor;
-        void main() {
-          vColor = uColor;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        uniform vec3 uColor;
-        uniform float uIntensity;
-        uniform float uDashOffset;
-        varying vec3 vColor;
-        void main() {
-          float dash = mod(gl_FragCoord.x * 0.03 + uDashOffset, 0.12);
-          float alpha = uIntensity * (dash > 0.04 ? 1.0 : 0.2);
-          gl_FragColor = vec4(vColor, alpha);
-        }
-      `,
+      uniforms: { uTime: { value: 0 }, uColor: { value: CYAN }, uIntensity: { value: 0.6 }, uRotation: { value: 0 } },
+      vertexShader: `uniform float uRotation; varying vec3 vColor; uniform vec3 uColor; void main() { float c = cos(uRotation), s = sin(uRotation); vec3 pos = position; pos.xz = vec2(pos.x * c - pos.z * s, pos.x * s + pos.z * c); vColor = uColor; gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0); }`,
+      fragmentShader: `uniform vec3 uColor; uniform float uIntensity; varying vec3 vColor; void main() { gl_FragColor = vec4(vColor, uIntensity); }`,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
-    
     this.outerRing = new THREE.Line(geo, this.outerRingMat);
     this.group.add(this.outerRing);
   }
 
-  private _buildSegmentRings(): void {
-    // Multiple nested segmented rings at different radii
-    const configs = [
-      { radius: 3.5, segments: 8, thickness: 0.025, color: CYAN, speed: 0.02 },
-      { radius: 3.2, segments: 12, thickness: 0.02, color: WHITE, speed: -0.015 },
-      { radius: 2.9, segments: 6, thickness: 0.03, color: GOLD, speed: 0.01 },
-      { radius: 2.6, segments: 16, thickness: 0.018, color: CYAN, speed: -0.025 },
-      { radius: 2.3, segments: 10, thickness: 0.022, color: DIM_CYAN, speed: 0.008 },
-    ];
-    
-    for (const cfg of configs) {
-      const segmentAngles: number[] = [];
-      const points: number[] = [];
-      
-      for (let s = 0; s < cfg.segments; s++) {
-        const baseAngle = (s / cfg.segments) * TAU;
-        const segLength = (TAU / cfg.segments) * 0.7; // 70% coverage
-        const startAngle = baseAngle + (TAU / cfg.segments) * 0.15;
-        
-        // Generate arc points for this segment
-        const arcPoints = 32;
-        for (let i = 0; i < arcPoints; i++) {
-          const t = i / arcPoints;
+  private _buildStepLockRing(): void {
+    const segments = 48;
+    const radius = 3.2;
+    const points: number[] = [];
+    for (let s = 0; s < segments; s++) {
+      const baseAngle = (s / segments) * TAU;
+      if (s < segments * 0.75) {
+        const segLength = (TAU / segments) * 0.6;
+        const startAngle = baseAngle + (TAU / segments) * 0.2;
+        for (let i = 0; i < 8; i++) {
+          const t = i / 8;
           const angle = startAngle + t * segLength;
-          points.push(Math.cos(angle) * cfg.radius);
-          points.push(0);
-          points.push(Math.sin(angle) * cfg.radius);
-          segmentAngles.push(angle);
+          const r = radius + Math.sin(t * Math.PI) * 0.03;
+          points.push(Math.cos(angle) * r, 0, Math.sin(angle) * r);
         }
       }
-      
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(points), 3));
-      
-      const mat = new THREE.ShaderMaterial({
-        uniforms: {
-          uTime: { value: 0 },
-          uColor: { value: cfg.color },
-          uIntensity: { value: 0.4 },
-          uRotation: { value: 0 },
-        },
-        vertexShader: `
-          uniform float uRotation;
-          varying vec3 vColor;
-          uniform vec3 uColor;
-          void main() {
-            float c = cos(uRotation);
-            float s = sin(uRotation);
-            vec3 pos = position;
-            pos.xz = vec2(pos.x * c - pos.z * s, pos.x * s + pos.z * c);
-            vColor = uColor;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform vec3 uColor;
-          uniform float uIntensity;
-          varying vec3 vColor;
-          void main() {
-            gl_FragColor = vec4(vColor, uIntensity);
-          }
-        `,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      });
-      
-      const ring = new THREE.Line(geo, mat);
-      this.group.add(ring);
-      this.segmentRings.push({ mesh: ring, mat, segments: segmentAngles });
     }
-  }
-
-  private _buildTickRing(): void {
-    // Dense ring of tick marks around the computational field
-    const tickGeo = new THREE.BoxGeometry(0.006, 0.06, 0.006);
-    this.tickMat = new THREE.MeshBasicMaterial({
-      color: CYAN,
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(points), 3));
+    this.stepLockMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uColor: { value: GOLD }, uIntensity: { value: 0.5 }, uRotation: { value: 0 } },
+      vertexShader: `uniform float uRotation; varying vec3 vColor; uniform vec3 uColor; void main() { float c = cos(uRotation), s = sin(uRotation); vec3 pos = position; pos.xz = vec2(pos.x * c - pos.z * s, pos.x * s + pos.z * c); vColor = uColor; gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0); }`,
+      fragmentShader: `uniform vec3 uColor; uniform float uIntensity; varying vec3 vColor; void main() { gl_FragColor = vec4(vColor, uIntensity); }`,
       transparent: true,
-      opacity: 0.5,
-      blending: THREE.AdditiveBlending,
       depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
-    
-    this.tickRing = new THREE.InstancedMesh(tickGeo, this.tickMat, this.tickCount);
-    const tm = new THREE.Matrix4();
-    
-    for (let i = 0; i < this.tickCount; i++) {
-      const angle = (i / this.tickCount) * TAU;
-      const r = 2.0;
-      const isMajor = i % 16 === 0;
-      const scale = isMajor ? 2.0 : 1.0;
-      
-      const pos = new THREE.Vector3(Math.cos(angle) * r, 0, Math.sin(angle) * r);
-      const rot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -angle);
-      tm.compose(pos, rot, new THREE.Vector3(1, scale, 1));
-      this.tickRing.setMatrixAt(i, tm);
-    }
-    
-    this.tickRing.instanceMatrix.needsUpdate = true;
-    this.group.add(this.tickRing);
+    this.stepLockRing = new THREE.Line(geo, this.stepLockMat);
+    this.group.add(this.stepLockRing);
   }
 
-  private _buildSignalPaths(): void {
-    // Thin orbital paths with traveling signal pulses
-    const configs = [
-      { radius: 1.85, speed: 0.15, tilt: 0 },
-      { radius: 1.75, speed: -0.12, tilt: 0 },
-      { radius: 1.65, speed: 0.18, tilt: 0 },
-      { radius: 1.55, speed: -0.1, tilt: 0 },
-    ];
-    
-    for (const cfg of configs) {
-      const points = new Float32Array(128 * 3);
-      for (let i = 0; i < 128; i++) {
-        const angle = (i / 128) * TAU;
-        points[i * 3] = Math.cos(angle) * cfg.radius;
-        points[i * 3 + 1] = 0;
-        points[i * 3 + 2] = Math.sin(angle) * cfg.radius;
-      }
-      
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(points, 3));
-      
-      const mat = new THREE.ShaderMaterial({
-        uniforms: {
-          uTime: { value: 0 },
-          uColor: { value: DIM_CYAN },
-          uOpacity: { value: 0.15 },
-        },
-        vertexShader: `
-          void main() {
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform vec3 uColor;
-          uniform float uOpacity;
-          void main() {
-            gl_FragColor = vec4(uColor, uOpacity);
-          }
-        `,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      });
-      
-      const ring = new THREE.Line(geo, mat);
-      this.group.add(ring);
-      
-      // Signal particles for this path
-      const signals = new Float32Array(this.signalCount * 3);
-      this.signalPaths.push({ ring, mat, signals });
+  private _buildRadarSweep(): void {
+    const sweepAngle = Math.PI / 6;
+    const radius = 2.8;
+    const positions = new Float32Array(102);
+    positions[0] = 0; positions[1] = 0; positions[2] = 0;
+    for (let i = 0; i <= 32; i++) {
+      const angle = -sweepAngle / 2 + (i / 32) * sweepAngle;
+      positions[i * 3 + 3] = Math.cos(angle) * radius;
+      positions[i * 3 + 4] = 0;
+      positions[i * 3 + 5] = Math.sin(angle) * radius;
     }
-  }
-
-  private _buildInnerField(): void {
-    // Radial lines creating computational field texture
-    const positions = new Float32Array(96 * 2 * 3);
-    
-    for (let i = 0; i < 96; i++) {
-      const angle = (i / 96) * TAU;
-      const innerR = 1.2;
-      const outerR = 1.5;
-      
-      positions[i * 6] = Math.cos(angle) * innerR;
-      positions[i * 6 + 1] = 0;
-      positions[i * 6 + 2] = Math.sin(angle) * innerR;
-      
-      positions[i * 6 + 3] = Math.cos(angle) * outerR;
-      positions[i * 6 + 4] = 0;
-      positions[i * 6 + 5] = Math.sin(angle) * outerR;
-    }
-    
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    
-    this.innerFieldMat = new THREE.ShaderMaterial({
-      uniforms: {
-        uTime: { value: 0 },
-        uColor: { value: DIM_CYAN },
-        uIntensity: { value: 0.25 },
-      },
-      vertexShader: `
-        uniform float uTime;
-        varying float vAlpha;
-        void main() {
-          float flicker = 0.6 + 0.4 * sin(uTime * 2.0 + position.x * 8.0);
-          vAlpha = flicker;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        uniform vec3 uColor;
-        uniform float uIntensity;
-        varying float vAlpha;
-        void main() {
-          gl_FragColor = vec4(uColor, uIntensity * vAlpha);
-        }
-      `,
+    geo.setDrawRange(0, 34);
+    this.radarSweepMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uColor: { value: TEAL }, uOpacity: { value: 0.3 }, uRotation: { value: 0 } },
+      vertexShader: `uniform float uRotation; varying float vAlpha; void main() { float c = cos(uRotation), s = sin(uRotation); vec3 pos = position; pos.xz = vec2(pos.x * c - pos.z * s, pos.x * s + pos.z * c); float angle = atan(pos.z, pos.x); vAlpha = 0.2 + 0.8 * smoothstep(-0.5, 0.5, angle); gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0); }`,
+      fragmentShader: `uniform vec3 uColor; uniform float uOpacity; varying float vAlpha; void main() { gl_FragColor = vec4(uColor, uOpacity * vAlpha); }`,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
-    
-    this.innerFieldLines = new THREE.LineSegments(geo, this.innerFieldMat);
-    this.group.add(this.innerFieldLines);
+    this.radarSweep = new THREE.Mesh(geo, this.radarSweepMat);
+    this.radarSweep.frustumCulled = false;
+    this.group.add(this.radarSweep);
   }
 
-  private _buildNucleus(): void {
-    // Central computational nucleus — 2D layered structure
-    this.nucleusGroup = new THREE.Group();
-    
-    // Concentric rings
-    const ringConfigs = [
-      { radius: 0.55, segments: 32, color: CYAN },
-      { radius: 0.45, segments: 24, color: WHITE },
-      { radius: 0.35, segments: 16, color: GOLD },
-    ];
-    
+  private _buildInnerTickRing(): void {
+    const tickCount = 96;
+    const radius = 2.4;
+    const points: number[] = [];
+    for (let i = 0; i < tickCount; i++) {
+      const angle = (i / tickCount) * TAU;
+      const isMajor = i % 12 === 0;
+      const tickLength = isMajor ? 0.15 : 0.06;
+      const innerR = radius - tickLength / 2;
+      const outerR = radius + tickLength / 2;
+      points.push(Math.cos(angle) * innerR, 0, Math.sin(angle) * innerR);
+      points.push(Math.cos(angle) * outerR, 0, Math.sin(angle) * outerR);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(points), 3));
+    this.innerTickMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uColor: { value: CYAN }, uIntensity: { value: 0.4 } },
+      vertexShader: `uniform float uTime; varying float vAlpha; void main() { float idx = float(gl_VertexID); float isMajor = mod(idx / 2.0, 12.0); float pulse = 0.5 + 0.5 * sin(uTime * 2.0 + idx * 0.1); vAlpha = isMajor < 0.5 || isMajor > 11.5 ? 0.6 + 0.4 * pulse : 0.3; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `uniform vec3 uColor; uniform float uIntensity; varying float vAlpha; void main() { gl_FragColor = vec4(uColor, uIntensity * vAlpha); }`,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this.innerTickRing = new THREE.LineSegments(geo, this.innerTickMat);
+    this.group.add(this.innerTickRing);
+  }
+
+  private _buildCenterGauge(): void {
+    this.centerGaugeGroup = new THREE.Group();
+    const ringConfigs = [{ radius: 0.65, segments: 24, color: CYAN }, { radius: 0.5, segments: 16, color: WHITE }, { radius: 0.35, segments: 12, color: GOLD }];
     for (const cfg of ringConfigs) {
       const points: number[] = [];
       for (let i = 0; i < cfg.segments; i++) {
         const angle = (i / cfg.segments) * TAU;
-        // Create segmented ring
-        if (i % 3 !== 0) {
-          points.push(Math.cos(angle) * cfg.radius);
-          points.push(0);
-          points.push(Math.sin(angle) * cfg.radius);
-        }
+        if (i % 4 !== 0) points.push(Math.cos(angle) * cfg.radius, 0, Math.sin(angle) * cfg.radius);
       }
-      
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(points), 3));
-      
       const mat = new THREE.ShaderMaterial({
-        uniforms: {
-          uTime: { value: 0 },
-          uColor: { value: cfg.color },
-          uIntensity: { value: 0.6 },
-          uPulse: { value: 0 },
-        },
-        vertexShader: `
-          uniform float uPulse;
-          varying vec3 vColor;
-          uniform vec3 uColor;
-          void main() {
-            vec3 pos = position * (1.0 + uPulse * 0.1);
-            vColor = uColor;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform vec3 uColor;
-          uniform float uIntensity;
-          varying vec3 vColor;
-          void main() {
-            gl_FragColor = vec4(vColor, uIntensity);
-          }
-        `,
+        uniforms: { uTime: { value: 0 }, uColor: { value: cfg.color }, uIntensity: { value: 0.7 }, uPulse: { value: 0 } },
+        vertexShader: `uniform float uPulse; varying vec3 vColor; uniform vec3 uColor; void main() { vec3 pos = position * (1.0 + uPulse * 0.15); vColor = uColor; gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0); }`,
+        fragmentShader: `uniform vec3 uColor; uniform float uIntensity; varying vec3 vColor; void main() { gl_FragColor = vec4(vColor, uIntensity); }`,
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       });
-      
       const ring = new THREE.Line(geo, mat);
-      this.nucleusGroup.add(ring);
-      this.nucleusRings.push(ring);
-      this.nucleusMat = mat;
+      this.centerGaugeGroup.add(ring);
+      if (cfg.radius === 0.5) this.centerGaugeMat = mat;
     }
-    
-    // Crosshair
-    const crossPoints = new Float32Array([
-      -0.6, 0, 0,  0.6, 0, 0,
-      0, 0, -0.6,  0, 0, 0.6,
-    ]);
+    const crossPoints = new Float32Array([-0.7, 0, 0, 0.7, 0, 0, 0, 0, -0.7, 0, 0, 0.7]);
     const crossGeo = new THREE.BufferGeometry();
     crossGeo.setAttribute("position", new THREE.BufferAttribute(crossPoints, 3));
     const crossMat = new THREE.ShaderMaterial({
-      uniforms: { uColor: { value: DIM_CYAN }, uIntensity: { value: 0.3 } },
+      uniforms: { uColor: { value: DIM_CYAN }, uIntensity: { value: 0.4 } },
       vertexShader: `varying vec3 vColor; uniform vec3 uColor; void main() { vColor = uColor; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
       fragmentShader: `varying vec3 vColor; uniform float uIntensity; void main() { gl_FragColor = vec4(vColor, uIntensity); }`,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
-    this.nucleusCrosshair = new THREE.LineSegments(crossGeo, crossMat);
-    this.nucleusGroup.add(this.nucleusCrosshair);
-    
-    this.group.add(this.nucleusGroup);
+    this.centerGaugeGroup.add(new THREE.LineSegments(crossGeo, crossMat));
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 16), new THREE.MeshBasicMaterial({ color: CYAN, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.centerGaugeGroup.add(dot);
+    this.group.add(this.centerGaugeGroup);
   }
 
-  private _buildMarkers(): void {
-    // Small marker points representing micro-data positions
-    this.markerPositions = new Float32Array(48 * 3);
-    for (let i = 0; i < 48; i++) {
-      const angle = (i / 48) * TAU;
-      const r = 2.1 + (i % 3) * 0.05;
-      this.markerPositions[i * 3] = Math.cos(angle) * r;
-      this.markerPositions[i * 3 + 1] = 0;
-      this.markerPositions[i * 3 + 2] = Math.sin(angle) * r;
+  private _buildSectorLines(): void {
+    const sectorCount = 8;
+    const innerR = 1.0, outerR = 2.2;
+    const points = new Float32Array(sectorCount * 2 * 3);
+    for (let i = 0; i < sectorCount; i++) {
+      const angle = (i / sectorCount) * TAU;
+      points[i * 6] = Math.cos(angle) * innerR;
+      points[i * 6 + 1] = 0;
+      points[i * 6 + 2] = Math.sin(angle) * innerR;
+      points[i * 6 + 3] = Math.cos(angle) * outerR;
+      points[i * 6 + 4] = 0;
+      points[i * 6 + 5] = Math.sin(angle) * outerR;
     }
-    
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(this.markerPositions, 3));
-    const mat = new THREE.PointsMaterial({
-      color: CYAN,
-      size: 0.04,
+    geo.setAttribute("position", new THREE.BufferAttribute(points, 3));
+    this.sectorMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uColor: { value: DIM_CYAN }, uIntensity: { value: 0.25 } },
+      vertexShader: `void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `uniform vec3 uColor; uniform float uIntensity; void main() { gl_FragColor = vec4(uColor, uIntensity); }`,
       transparent: true,
-      opacity: 0.6,
-      blending: THREE.AdditiveBlending,
       depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
-    
-    this.markerPoints = new THREE.Points(geo, mat);
-    this.group.add(this.markerPoints);
+    this.sectorLines = new THREE.LineSegments(geo, this.sectorMat);
+    this.group.add(this.sectorLines);
   }
 
-  setTint(hex: string): void {
-    this.userTint.set(hex);
-    this.tint.copy(this.userTint);
+  private _buildSignalParticles(): void {
+    const positions = new Float32Array(this.signalCount * 3);
+    const times = new Float32Array(this.signalCount);
+    for (let i = 0; i < this.signalCount; i++) {
+      positions[i * 3] = 0; positions[i * 3 + 1] = 0; positions[i * 3 + 2] = 0;
+      times[i] = Math.random();
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    this.signalParticleMat = new THREE.PointsMaterial({ color: CYAN, size: 0.06, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.signalParticles = new THREE.Points(geo, this.signalParticleMat);
+    this.signalParticlePositions = positions;
+    this.signalParticleTimes = times;
+    this.group.add(this.signalParticles);
   }
 
-  setEmissive(): void {
-    // No-op for API compatibility
+  private _buildPingRing(): void {
+    const points = new Float32Array(64 * 3);
+    for (let i = 0; i < 64; i++) {
+      const angle = (i / 64) * TAU;
+      points[i * 3] = Math.cos(angle); points[i * 3 + 1] = 0; points[i * 3 + 2] = Math.sin(angle);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(points, 3));
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uColor: { value: CYAN }, uScale: { value: 0 }, uOpacity: { value: 0 } },
+      vertexShader: `uniform float uScale; void main() { vec3 pos = position * uScale; gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0); }`,
+      fragmentShader: `uniform vec3 uColor; uniform float uOpacity; void main() { gl_FragColor = vec4(uColor, uOpacity); }`,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this.pingRing = new THREE.LineLoop(geo, mat);
+    this.pingRing.visible = false;
+    this.pingRingMat = mat;
+    this.group.add(this.pingRing);
   }
 
-  setArcVisible(v: boolean): void {
-    this.group.visible = v;
-  }
+  setTint(hex: string): void { this.userTint.set(hex); this.tint.copy(this.userTint); }
+  setEmissive(): void {}
+  setArcVisible(v: boolean): void { this.group.visible = v; }
 
   setState(state: CoreState): void {
     this.targetParams = { ...STATE_PARAMS[state] };
     if (state === "SUCCESS") {
-      this.flashT = 0.4;
+      this.flashT = 0.4; this.pingRingActive = true; this.pingRingScale = 0.5; this.pingRing.visible = true;
+      this.pingRingMat.uniforms.uColor.value = GREEN;
     } else if (state === "ERROR") {
-      this.flashT = 0.4;
-      this.errorShake = 0.5;
+      this.flashT = 0.4; this.errorShake = 0.5; this.pingRingActive = true; this.pingRingScale = 0.5; this.pingRing.visible = true;
+      this.pingRingMat.uniforms.uColor.value = RED;
     }
   }
 
-  pulse(): void {
-    this.flashT = 0.2;
-  }
+  pulse(): void { this.centerTargetValue = 75 + Math.random() * 20; }
 
-  update(dt: number, time: number, levels: AudioLevels, state: CoreState): void {
+  update(dt: number, time: number, audioLevels?: AudioLevels, state?: CoreState): void {
     this.time = time;
-    
-    // Smooth state parameter interpolation
-    const target = this.targetParams;
-    this.stateParamsCur.activity = damp(this.stateParamsCur.activity, target.activity, 2.5, dt);
-    this.stateParamsCur.signalSpeed = damp(this.stateParamsCur.signalSpeed, target.signalSpeed, 3.0, dt);
-    this.stateParamsCur.glowIntensity = damp(this.stateParamsCur.glowIntensity, target.glowIntensity, 2.0, dt);
-    this.stateParamsCur.turbulence = damp(this.stateParamsCur.turbulence, target.turbulence, 2.2, dt);
-    this.stateParamsCur.pulseRate = damp(this.stateParamsCur.pulseRate, target.pulseRate, 2.5, dt);
-    
-    // Animation phases
-    this.breathPhase += dt * (0.5 + this.stateParamsCur.pulseRate * 1.5);
-    this.pulsePhase += dt * (3.0 + this.stateParamsCur.pulseRate * 6.0);
-    
-    // Update outer ring
-    if (this.outerRingMat) {
-      this.outerRingMat.uniforms.uTime.value = time;
-      this.outerRingMat.uniforms.uIntensity.value = 0.4 + this.stateParamsCur.glowIntensity * 0.3;
-      this.outerRingMat.uniforms.uDashOffset.value = time * 0.1;
+    for (const key in this.stateParamsCur) {
+      const k = key as keyof StateParams;
+      this.stateParamsCur[k] = damp(this.stateParamsCur[k], this.targetParams[k], 2.5, dt);
     }
-    
-    // Update segment rings
-    for (let i = 0; i < this.segmentRings.length; i++) {
-      const seg = this.segmentRings[i];
-      const speedMult = 1.0 + this.stateParamsCur.signalSpeed * 2.0;
-      seg.mat.uniforms.uTime.value = time;
-      seg.mat.uniforms.uRotation.value += dt * seg.mesh.userData.speed * speedMult;
-      seg.mat.uniforms.uIntensity.value = 0.3 + this.stateParamsCur.activity * 0.4;
+    const params = this.stateParamsCur;
+    this.outerRotation += params.rotationSpeed * dt * 0.5;
+    this.outerRingMat.uniforms.uRotation.value = this.outerRotation;
+    this.outerRingMat.uniforms.uTime.value = time;
+    this.outerRingMat.uniforms.uIntensity.value = params.glowIntensity * 0.6;
+    this.stepLockTimer += dt;
+    const stepPeriod = 2.0 / Math.max(params.stepLockSpeed, 0.01);
+    if (this.stepLockTimer > stepPeriod) { this.stepLockTimer = 0; this.stepLockTarget = (Math.random() - 0.5) * 0.8; }
+    this.stepLockAngle = damp(this.stepLockAngle, this.stepLockTarget, 8, dt);
+    this.stepLockMat.uniforms.uRotation.value = this.stepLockAngle;
+    this.stepLockMat.uniforms.uTime.value = time;
+    this.stepLockMat.uniforms.uIntensity.value = params.activity * 0.5;
+    this.radarRotation += params.signalSpeed * dt * 2.0;
+    this.radarSweepMat.uniforms.uRotation.value = this.radarRotation;
+    this.radarSweepMat.uniforms.uTime.value = time;
+    this.radarSweepMat.uniforms.uOpacity.value = 0.2 + params.activity * 0.2;
+    this.innerTickMat.uniforms.uTime.value = time;
+    this.innerTickMat.uniforms.uIntensity.value = params.activity * 0.4;
+    this.breathPhase += params.pulseRate * dt;
+    const breath = Math.sin(this.breathPhase) * 0.5 + 0.5;
+    this.centerValue = damp(this.centerValue, this.centerTargetValue, 2, dt);
+    if (this.centerGaugeMat) this.centerGaugeMat.uniforms.uPulse.value = breath * 0.3;
+    this.sectorMat.uniforms.uTime.value = time;
+    this.sectorMat.uniforms.uIntensity.value = params.turbulence * 0.25;
+    const radii = [1.8, 1.6, 1.4, 1.2];
+    const speeds = [0.8, -0.6, 1.0, -0.4];
+    for (let i = 0; i < this.signalCount; i++) {
+      this.signalParticleTimes[i] += params.signalSpeed * dt * 0.5;
+      const t = this.signalParticleTimes[i] % 1.0;
+      const ringIdx = i % radii.length;
+      const angle = t * TAU * (speeds[ringIdx] > 0 ? 1 : -1);
+      const r = radii[ringIdx];
+      this.signalParticlePositions[i * 3] = Math.cos(angle) * r;
+      this.signalParticlePositions[i * 3 + 1] = 0;
+      this.signalParticlePositions[i * 3 + 2] = Math.sin(angle) * r;
     }
-    
-    // Update tick ring
-    this.tickRing.rotation.y += dt * 0.02 * (1.0 + this.stateParamsCur.signalSpeed);
-    this.tickMat.opacity = 0.4 + this.stateParamsCur.glowIntensity * 0.2;
-    
-    // Update signal paths
-    for (let i = 0; i < this.signalPaths.length; i++) {
-      const path = this.signalPaths[i];
-      path.mat.uniforms.uTime.value = time;
-      path.mat.uniforms.uOpacity.value = 0.1 + this.stateParamsCur.activity * 0.15;
-      
-      // Animate signal particles along paths
-      for (let s = 0; s < this.signalCount; s++) {
-        const signalT = ((time * (0.2 + this.stateParamsCur.signalSpeed * 0.5) + s * 0.15) % 1);
-        const angle = signalT * TAU;
-        const r = 1.85 - i * 0.1;
-        path.signals[s * 3] = Math.cos(angle) * r;
-        path.signals[s * 3 + 1] = 0;
-        path.signals[s * 3 + 2] = Math.sin(angle) * r;
-      }
+    this.signalParticles.geometry.attributes.position.needsUpdate = true;
+    this.signalParticleMat.opacity = 0.5 + params.activity * 0.4;
+    if (this.pingRingActive) {
+      this.pingRingScale += dt * 2.5;
+      const fade = 1.0 - this.pingRingScale;
+      if (fade <= 0) { this.pingRingActive = false; this.pingRing.visible = false; }
+      else { this.pingRingMat.uniforms.uScale.value = this.pingRingScale; this.pingRingMat.uniforms.uOpacity.value = fade * 0.8; }
     }
-    
-    // Update inner field
-    this.innerFieldMat.uniforms.uTime.value = time;
-    this.innerFieldMat.uniforms.uIntensity.value = 0.2 + this.stateParamsCur.activity * 0.3;
-    
-    // Update nucleus
-    const pulseVal = Math.sin(this.pulsePhase) * 0.1 * this.stateParamsCur.activity;
-    for (const ring of this.nucleusRings) {
-      (ring.material as THREE.ShaderMaterial).uniforms.uPulse.value = pulseVal;
-      (ring.material as THREE.ShaderMaterial).uniforms.uIntensity.value = 0.5 + this.stateParamsCur.glowIntensity * 0.3;
-    }
-    this.nucleusGroup.scale.setScalar(1.0 + Math.sin(this.breathPhase) * 0.05 * this.stateParamsCur.activity);
-    
-    // Update markers
-    (this.markerPoints.material as THREE.PointsMaterial).opacity = 0.4 + this.stateParamsCur.activity * 0.3;
-    
-    // Flash effect
-    if (this.flashT >= 0) {
+    if (this.flashT > 0) {
       this.flashT -= dt;
-      const flashAlpha = Math.max(0, this.flashT / 0.4);
-      for (const ring of this.nucleusRings) {
-        (ring.material as THREE.ShaderMaterial).uniforms.uIntensity.value = 0.5 + flashAlpha * 0.8;
-      }
+      const flashIntensity = this.flashT / 0.4;
+      this.outerRingMat.uniforms.uIntensity.value = params.glowIntensity * (0.6 + flashIntensity * 0.4);
     }
-    
-    // Error shake
     if (this.errorShake > 0) {
       this.errorShake -= dt;
-      const shakeAmt = this.errorShake * 0.1;
-      this.group.position.x = (Math.random() - 0.5) * shakeAmt;
-      this.group.position.y = (Math.random() - 0.5) * shakeAmt;
-    } else {
-      this.group.position.x = 0;
-      this.group.position.y = 0;
+      if (this.errorShake > 0) { this.group.position.x = (Math.random() - 0.5) * this.errorShake * 0.3; this.group.position.z = (Math.random() - 0.5) * this.errorShake * 0.3; }
+      else { this.group.position.x = 0; this.group.position.z = 0; }
+    }
+    if (audioLevels) {
+      const level = Math.min((audioLevels.level || 0) * 2.0, 1.0);
+      this.centerGaugeGroup.scale.setScalar(1.0 + level * 0.15);
     }
   }
 
   dispose(): void {
-    this.group.clear();
+    this.outerRing.geometry.dispose(); this.outerRingMat.dispose();
+    this.stepLockRing.geometry.dispose(); this.stepLockMat.dispose();
+    this.radarSweep.geometry.dispose(); this.radarSweepMat.dispose();
+    this.innerTickRing.geometry.dispose(); this.innerTickMat.dispose();
+    this.centerGaugeGroup.traverse((obj) => { if ((obj as THREE.Mesh).geometry) { (obj as THREE.Mesh).geometry.dispose(); if ((obj as THREE.Mesh).material) ((obj as THREE.Mesh).material as THREE.Material).dispose(); } });
+    this.sectorLines.geometry.dispose(); this.sectorMat.dispose();
+    this.signalParticles.geometry.dispose(); this.signalParticleMat.dispose();
+    this.pingRing.geometry.dispose(); this.pingRingMat.dispose();
   }
 }
