@@ -60,19 +60,15 @@ export default function App(): JSX.Element {
     return () => window.removeEventListener("pointerdown", arm);
   }, []);
 
-  /* vision & gesture pipeline — a SWIPE flick cycles sectors */
+  /* vision & gesture pipeline — disabled for normal mouse interaction
+     Gesture-based navigation removed per user request.
+     Navigation is now explicit via click/keyboard only. */
   useEffect(() => {
     const pipeline = startGesturePipeline();
-    const off = bus.on("GESTURE_DETECTED", ({ gesture }) => {
-      if (gesture !== "SWIPE") return;
-      const st = useVortex.getState();
-      const idx = TAB_ORDER.indexOf(st.tab);
-      const next = TAB_ORDER[(idx + 1) % TAB_ORDER.length];
-      st.setTab(next);
-      st.pushLog("info", "GESTURE", `SWIPE recognized — sector cycled to ${next.toUpperCase()}`);
-    });
+    // GESTURE_DETECTED events are still emitted but no longer trigger tab changes
+    // This preserves the vision system for other potential uses while preventing
+    // accidental tab switching during normal mouse movement
     return () => {
-      off();
       pipeline.stop();
     };
   }, []);
